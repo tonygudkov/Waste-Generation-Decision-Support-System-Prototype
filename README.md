@@ -4,7 +4,7 @@ This Streamlit app reads the integrated business waste workbook and provides pla
 
 ## Stakeholder Demo
 
-For the public prototype, deploy `demo_app.py`. It uses the same app code but only shows the polished dashboards:
+For the stakeholder prototype, deploy `demo_app.py`. It uses the same app code but only shows the polished dashboards:
 
 - Business heat map
 - Census block groups
@@ -36,7 +36,12 @@ Run the stakeholder demo locally on port `8510`:
 
 ## Streamlit Community Cloud
 
-Use these settings when creating the public app:
+Keep the GitHub repository private if the code and packaged workbook should not be publicly visible.
+Streamlit Community Cloud can deploy from a private GitHub repository after you grant Streamlit access
+to private repositories. The deployed app starts private by default and can be made public from Streamlit
+Cloud's app sharing settings if you want a broadly shareable stakeholder link.
+
+Use these settings when creating the Streamlit app:
 
 ```text
 Repository: Waste Generation Decision Support System Prototype
