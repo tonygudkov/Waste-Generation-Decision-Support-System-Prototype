@@ -19,9 +19,12 @@ import streamlit.components.v1 as components
 
 APP_DIR = Path(__file__).resolve().parent
 TIGER_DIR = APP_DIR / "data" / "tiger"
+BOUNDARY_DIR = APP_DIR / "data" / "boundaries"
 CACHE_DIR = APP_DIR / "data" / "cache"
 OSM_DIR = APP_DIR / "data" / "osm"
 EXPORT_DIR = APP_DIR / "outputs"
+MEDIA_DIR = APP_DIR / "data" / "media"
+TUTORIAL_VIDEO_PATH = MEDIA_DIR / "using_iwma_decision_support_system_prototype.mp4"
 CACHE_VERSION = "2026-05-27-cache-v1"
 
 LOCAL_DATA_PATH = (
@@ -74,6 +77,15 @@ BLOCK_GROUP_METRICS = {
     "Average tons per business": "avg_tons_per_business",
 }
 
+HEATMAP_VOLUME_METRIC = "Total tons"
+HEATMAP_TONS_PER_BUSINESS_METRIC = "Tons per business"
+HEATMAP_BUSINESSES_PER_SQ_MI_METRIC = "Businesses per sq mi"
+HEATMAP_METRICS = [
+    HEATMAP_VOLUME_METRIC,
+    HEATMAP_TONS_PER_BUSINESS_METRIC,
+    HEATMAP_BUSINESSES_PER_SQ_MI_METRIC,
+]
+
 PARETO_CHART_ROWS = 25
 PARETO_TABLE_ROWS = 50
 VITAL_FEW_THRESHOLD = 80.0
@@ -109,20 +121,27 @@ ROAD_DISTANCE_TIGER_MODE = "Road network (Census TIGER)"
 ROAD_DISTANCE_OSM_MODE = "Road network (OpenStreetMap)"
 ROAD_DISTANCE_ESTIMATE_MODE = "Straight-line estimate"
 TIGER_ROUTE_CACHE_COLUMNS = {"business_road_node", "landfill_road_node"}
+HAULER_FACILITY_ALLOCATION_MODE = "Hauler facility rules"
 DEMO_MODE = os.environ.get("WASTE_DSS_DEMO_MODE", "").strip() == "1"
 FULL_DASHBOARD_OPTIONS = [
     "Home",
+    "Quick start guide",
     "Data infrastructure",
+    "Assumptions",
     "Business heat map",
     "Census block groups",
     "Diversion opportunity",
+    "Outreach campaign builder",
+    "Circular economy marketplace",
     "Circular flow engine",
     "2025 study vs model",
 ]
 DEMO_DASHBOARD_OPTIONS = [
+    "Quick start guide",
     "Business heat map",
     "Census block groups",
     "Diversion opportunity",
+    "Assumptions",
     "2025 study vs model",
 ]
 DASHBOARD_OPTIONS = DEMO_DASHBOARD_OPTIONS if DEMO_MODE else FULL_DASHBOARD_OPTIONS
@@ -193,6 +212,109 @@ LANDFILL_FACILITIES = [
 LANDFILL_CHART_COLORS = {
     facility["Landfill"]: f"#{facility['color'][0]:02x}{facility['color'][1]:02x}{facility['color'][2]:02x}"
     for facility in LANDFILL_FACILITIES
+}
+HAULER_FACILITY_RULES = [
+    {
+        "Hauler Pattern": "Waste Connections",
+        "Landfill": "Cold Canyon Landfill",
+        "Rule": "Waste Connections trash trucks empty at Cold Canyon Landfill.",
+    },
+    {
+        "Hauler Pattern": "Waste Management / WM",
+        "Landfill": "Chicago Grade Landfill",
+        "Rule": "Waste Management trash trucks empty at Chicago Grade Landfill.",
+    },
+    {
+        "Hauler Pattern": "Paso Robles Waste",
+        "Landfill": "City of Paso Robles Landfill",
+        "Rule": "Paso Robles Waste trash trucks empty at Paso Robles Landfill.",
+    },
+    {
+        "Hauler Pattern": "San Miguel Garbage",
+        "Landfill": "City of Paso Robles Landfill",
+        "Rule": "San Miguel Garbage trash trucks empty at Paso Robles Landfill.",
+    },
+]
+MARKETPLACE_USER_KEYWORDS = {
+    "Paper": [
+        "packag",
+        "shipping",
+        "warehouse",
+        "wholesale",
+        "retail",
+        "office",
+        "print",
+        "mail",
+        "education",
+    ],
+    "Plastic": [
+        "manufactur",
+        "packag",
+        "retail",
+        "wholesale",
+        "repair",
+        "arts",
+        "construction",
+    ],
+    "Metal": [
+        "manufactur",
+        "fabricat",
+        "machine",
+        "auto",
+        "repair",
+        "construction",
+        "durable",
+        "truck",
+    ],
+    "Glass": [
+        "food",
+        "beverage",
+        "restaurant",
+        "arts",
+        "manufactur",
+        "retail",
+    ],
+    "Organics": [
+        "food",
+        "restaurant",
+        "grocery",
+        "market",
+        "hotel",
+        "school",
+        "education",
+        "landscape",
+        "nursery",
+        "garden",
+        "compost",
+        "agric",
+    ],
+    "C&D": [
+        "construction",
+        "building",
+        "contractor",
+        "landscape",
+        "repair",
+        "architect",
+        "wood",
+        "lumber",
+    ],
+    "HHW": [
+        "auto",
+        "repair",
+        "electronics",
+        "medical",
+        "maintenance",
+        "paint",
+        "clean",
+    ],
+    "Other": [
+        "manufactur",
+        "repair",
+        "arts",
+        "retail",
+        "services",
+        "reuse",
+    ],
 }
 LANDFILL_STUDY_BASIS = [
     {"Landfill": "Cold Canyon Landfill", "2019 MSW Tons": 147_110, "Study Countywide Share (%)": 51.0},
@@ -445,6 +567,17 @@ st.markdown(
             border-radius: 8px;
             overflow: hidden;
         }
+        .dashboard-loading-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 99999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(247, 248, 246, 0.42);
+            backdrop-filter: blur(2px);
+            pointer-events: none;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -532,6 +665,82 @@ def option_values(series: pd.Series) -> list[str]:
     return sorted(values, key=str.casefold)
 
 
+def industry_description_columns(df: pd.DataFrame) -> list[str]:
+    return existing_columns(
+        df,
+        [
+            "Primary NAICS Description",
+            "Secondary NAICS Description",
+            "Primary SIC Description",
+            "Secondary SIC Description",
+            "Line of Business",
+        ],
+    )
+
+
+def combined_option_values(df: pd.DataFrame, columns: list[str]) -> list[str]:
+    values = []
+    for column in columns:
+        if column in df.columns:
+            values.append(df[column])
+    if not values:
+        return []
+    return option_values(pd.concat(values, ignore_index=True))
+
+
+def industry_filter_mask(
+    df: pd.DataFrame,
+    industry_filter_field: str,
+    industry_fields: list[str],
+    selected_industries: list[str],
+) -> pd.Series:
+    if not selected_industries:
+        return pd.Series(True, index=df.index)
+    selected = {str(value).strip() for value in selected_industries}
+    if industry_filter_field == "Any NAICS/SIC description":
+        mask = pd.Series(False, index=df.index)
+        for column in industry_fields:
+            if column in df.columns:
+                mask = mask | df[column].fillna("").astype(str).str.strip().isin(selected)
+        return mask
+    if industry_filter_field in df.columns:
+        return df[industry_filter_field].fillna("").astype(str).str.strip().isin(selected)
+    return pd.Series(True, index=df.index)
+
+
+def multifamily_mask(df: pd.DataFrame, business_group_field: str) -> pd.Series:
+    candidates = []
+    for column in [
+        business_group_field,
+        "Business Group",
+        "SMART1383 Business Group",
+        "calrecycle_profile_business_group",
+    ]:
+        if column and column in df.columns and column not in candidates:
+            candidates.append(column)
+    mask = pd.Series(False, index=df.index)
+    for column in candidates:
+        mask = mask | df[column].fillna("").astype(str).str.contains("multifamily", case=False, na=False)
+    return mask
+
+
+def umbrella_metrics_frame(df: pd.DataFrame, business_group_field: str) -> pd.DataFrame:
+    """Return the ICI business subset used by aggregate dashboard metrics.
+
+    Multifamily records remain in the underlying planner dataset and in business-level
+    displays. They are excluded only where an aggregate represents the commercial/ICI
+    planning universe or the ICI waste-characterization study.
+    """
+    if df.empty:
+        return df.copy()
+    return df[~multifamily_mask(df, business_group_field)].copy()
+
+
+def study_validation_frame(df: pd.DataFrame, business_group_field: str) -> pd.DataFrame:
+    """Compatibility name for the study-validation subset."""
+    return umbrella_metrics_frame(df, business_group_field)
+
+
 def format_material_name(material_key: str) -> str:
     special = {
         "and": "and",
@@ -572,6 +781,53 @@ def numeric_sum(df: pd.DataFrame, columns: list[str]) -> pd.Series:
         return pd.Series(0.0, index=df.index)
     numeric = df[columns].apply(pd.to_numeric, errors="coerce").fillna(0)
     return numeric.sum(axis=1)
+
+
+STREAM_FINGERPRINT_COLORS = {
+    "Landfill": IWMA_GRAY,
+    "Recycle": IWMA_BLUE,
+    "Organics": IWMA_GREEN,
+    "Diversion": IWMA_PURPLE,
+}
+
+
+def row_stream_tons(row: pd.Series) -> dict[str, float]:
+    values = {}
+    for stream_config in STREAM_COLUMNS.values():
+        label = stream_config["label"]
+        column = stream_config["total"]
+        values[label] = row_numeric_value(row, column)
+    return values
+
+
+def stream_fingerprint_html(stream_tons: dict[str, float], compact: bool = True) -> str:
+    total = sum(max(float(value), 0.0) for value in stream_tons.values())
+    if total <= 0:
+        return "<div style='font-size:11px;color:#dfe4de;'>No stream tons available</div>"
+    segments = []
+    labels = []
+    for label, value in stream_tons.items():
+        share = max(float(value), 0.0) / total * 100
+        if share <= 0:
+            continue
+        color = STREAM_FINGERPRINT_COLORS.get(label, IWMA_GRAY)
+        segments.append(
+            f"<div title='{html.escape(label)} {share:.1f}%' "
+            f"style='height:100%;width:{share:.2f}%;background:{color};'></div>"
+        )
+        labels.append(f"{label} {share:.0f}%")
+    height = "9px" if compact else "16px"
+    label_html = "" if compact else "<div style='font-size:0.82rem;color:#5f6762;margin-top:0.3rem;'>" + " | ".join(labels) + "</div>"
+    return (
+        f"<div style='margin-top:0.35rem;min-width:180px;'>"
+        f"<div style='display:flex;overflow:hidden;height:{height};border-radius:999px;background:#edf1ec;'>"
+        + "".join(segments)
+        + f"</div>{label_html}</div>"
+    )
+
+
+def row_stream_fingerprint_html(row: pd.Series, compact: bool = True) -> str:
+    return stream_fingerprint_html(row_stream_tons(row), compact=compact)
 
 
 def selected_metric(
@@ -679,9 +935,25 @@ def prepare_business_map_frame(
         25,
         260,
     )
+    for stream_config in STREAM_COLUMNS.values():
+        column = stream_config["total"]
+        label = stream_config["label"]
+        output_column = f"{label} Tons"
+        map_df[output_column] = (
+            pd.to_numeric(map_df[column], errors="coerce").fillna(0)
+            if column in map_df.columns
+            else 0.0
+        )
+    map_df["stream_fingerprint"] = map_df.apply(row_stream_fingerprint_html, axis=1)
     map_df["tooltip_title"] = map_df["business_name"]
     map_df["tooltip_body"] = (
-        map_df["selected_tons"] + " tons<br/>" + map_df["jurisdiction"] + "<br/>" + map_df["business_group"]
+        map_df["selected_tons"]
+        + " tons<br/>"
+        + map_df["jurisdiction"]
+        + "<br/>"
+        + map_df["business_group"]
+        + "<br/><span style='font-size:11px;color:#dfe4de;'>Waste stream fingerprint</span>"
+        + map_df["stream_fingerprint"]
     )
     keep_columns = [
         "_business_row_id",
@@ -692,6 +964,11 @@ def prepare_business_map_frame(
         "jurisdiction",
         "business_group",
         "Hauler",
+        "Landfill Tons",
+        "Recycle Tons",
+        "Organics Tons",
+        "Diversion Tons",
+        "stream_fingerprint",
         "selected_tons",
         "point_radius",
         "tooltip_title",
@@ -770,6 +1047,117 @@ def heat_weight(values: pd.Series, scale: str) -> pd.Series:
     return clean
 
 
+def heatmap_grid_source(map_df: pd.DataFrame, heat_metric: str, weight_scale: str) -> pd.DataFrame:
+    if map_df.empty:
+        return pd.DataFrame(columns=["latitude", "longitude", "heat_metric_value", "heat_weight"])
+    cell_degrees = 0.015
+    grid = map_df.copy()
+    grid["_grid_lat"] = np.floor(grid["latitude"].astype(float) / cell_degrees) * cell_degrees
+    grid["_grid_lon"] = np.floor(grid["longitude"].astype(float) / cell_degrees) * cell_degrees
+    grouped = (
+        grid.groupby(["_grid_lat", "_grid_lon"], dropna=False)
+        .agg(
+            total_tons=("selected_waste_tons", "sum"),
+            business_count=("_business_row_id", "nunique"),
+            latitude=("latitude", "mean"),
+            longitude=("longitude", "mean"),
+        )
+        .reset_index()
+    )
+    lat_miles = 69.0 * cell_degrees
+    lon_miles = 69.172 * cell_degrees * np.cos(np.radians(grouped["latitude"].astype(float)))
+    grouped["cell_area_sq_mi"] = (lat_miles * lon_miles).clip(lower=0.05)
+    grouped["tons_per_business"] = np.where(
+        grouped["business_count"] > 0,
+        grouped["total_tons"] / grouped["business_count"],
+        0.0,
+    )
+    grouped["businesses_per_sq_mi"] = grouped["business_count"] / grouped["cell_area_sq_mi"]
+    metric_column = {
+        HEATMAP_VOLUME_METRIC: "total_tons",
+        HEATMAP_TONS_PER_BUSINESS_METRIC: "tons_per_business",
+        HEATMAP_BUSINESSES_PER_SQ_MI_METRIC: "businesses_per_sq_mi",
+    }.get(heat_metric, "total_tons")
+    grouped["heat_metric_value"] = pd.to_numeric(grouped[metric_column], errors="coerce").fillna(0.0)
+    grouped["heat_weight"] = heat_weight(grouped["heat_metric_value"], weight_scale)
+    grouped["tooltip_title"] = heat_metric
+    grouped["tooltip_body"] = (
+        "Total tons: "
+        + grouped["total_tons"].map(lambda value: f"{value:,.1f}")
+        + "<br/>Businesses: "
+        + grouped["business_count"].map(lambda value: f"{int(value):,}")
+        + "<br/>Tons per business: "
+        + grouped["tons_per_business"].map(lambda value: f"{value:,.1f}")
+        + "<br/>Businesses per sq mi: "
+        + grouped["businesses_per_sq_mi"].map(lambda value: f"{value:,.1f}")
+    )
+    return grouped
+
+
+def heatmap_jurisdiction_kpis(
+    filtered: pd.DataFrame,
+    selected_jurisdictions: list[str],
+    jurisdiction_field: str,
+    material_columns: dict[str, dict[str, str]],
+    selected_streams: list[str],
+    selected_materials: list[str],
+    material_mode: str,
+) -> pd.DataFrame:
+    if not selected_jurisdictions or jurisdiction_field not in filtered.columns:
+        return pd.DataFrame()
+
+    rows = []
+    for jurisdiction in selected_jurisdictions:
+        subset = filtered[filtered[jurisdiction_field].astype(str) == str(jurisdiction)].copy()
+        if subset.empty:
+            continue
+        tons = float(pd.to_numeric(subset["selected_waste_tons"], errors="coerce").fillna(0).sum())
+        businesses = int(subset["_business_row_id"].nunique()) if "_business_row_id" in subset.columns else len(subset)
+        material_table = material_driver_table(
+            subset,
+            material_columns,
+            selected_streams,
+            selected_materials,
+            material_mode,
+        )
+        top_material = str(material_table.iloc[0]["Material"]) if not material_table.empty else "No material tons"
+        rows.append(
+            {
+                "Jurisdiction": str(jurisdiction),
+                "Selected Tons": tons,
+                "Mapped Businesses": businesses,
+                "Tons per Business": tons / businesses if businesses else 0.0,
+                "Top Material": top_material,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def render_heatmap_jurisdiction_cards(summary: pd.DataFrame) -> None:
+    if summary.empty:
+        return
+
+    cards = []
+    for _, row in summary.iterrows():
+        cards.append(
+            "<div style='border:1px solid #dfe4de;border-radius:8px;"
+            "background:#f7f8f6;padding:0.75rem 0.8rem;margin-bottom:0.65rem;'>"
+            f"<div style='font-size:0.82rem;color:#6e756f;margin-bottom:0.2rem;'>Jurisdiction</div>"
+            f"<div style='font-size:1rem;font-weight:750;color:#2f343f;'>{html.escape(str(row['Jurisdiction']))}</div>"
+            f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:0.45rem;margin-top:0.65rem;'>"
+            f"<div><div style='font-size:0.72rem;color:#6e756f;'>Tons</div>"
+            f"<div style='font-weight:725;color:#2f343f;'>{float(row['Selected Tons']):,.1f}</div></div>"
+            f"<div><div style='font-size:0.72rem;color:#6e756f;'>Businesses</div>"
+            f"<div style='font-weight:725;color:#2f343f;'>{int(row['Mapped Businesses']):,}</div></div>"
+            f"<div><div style='font-size:0.72rem;color:#6e756f;'>Tons/business</div>"
+            f"<div style='font-weight:725;color:#2f343f;'>{float(row['Tons per Business']):,.1f}</div></div>"
+            f"<div><div style='font-size:0.72rem;color:#6e756f;'>Top material</div>"
+            f"<div style='font-weight:725;color:#2f343f;'>{html.escape(str(row['Top Material']))}</div></div>"
+            "</div></div>"
+        )
+    st.markdown("".join(cards), unsafe_allow_html=True)
+
+
 def business_display_column(df: pd.DataFrame) -> str | None:
     return first_existing_column(
         df,
@@ -804,6 +1192,29 @@ def hauler_display_column(df: pd.DataFrame) -> str | None:
             "calrecycle_hauler",
         ],
     )
+
+
+def normalize_hauler_text(value) -> str:
+    if pd.isna(value):
+        return ""
+    return re.sub(r"[^a-z0-9]+", " ", str(value).lower()).strip()
+
+
+def hauler_facility_rule(value) -> str:
+    hauler = normalize_hauler_text(value)
+    if not hauler:
+        return ""
+    if "waste connections" in hauler:
+        return "Cold Canyon Landfill"
+    if "waste management" in hauler or hauler == "wm" or hauler.startswith("wm "):
+        return "Chicago Grade Landfill"
+    if "paso robles waste" in hauler or "san miguel garbage" in hauler:
+        return "City of Paso Robles Landfill"
+    return ""
+
+
+def hauler_rule_reference_table() -> pd.DataFrame:
+    return pd.DataFrame(HAULER_FACILITY_RULES)
 
 
 def contact_display_columns(df: pd.DataFrame) -> dict[str, str]:
@@ -850,6 +1261,14 @@ def census_block_group_url(year: str, state_fips: str) -> str:
 def default_census_zip_path(year: str, state_fips: str) -> Path:
     state = state_fips.zfill(2)
     return TIGER_DIR / f"tl_{year}_{state}_bg.zip"
+
+
+def bundled_slo_block_group_path() -> Path:
+    """Return the packaged SLO County boundary file, when present.
+
+    The demo must remain usable when the Census download host is unavailable.
+    """
+    return BOUNDARY_DIR / "slo_county_block_groups_2023.geojson"
 
 
 def census_zcta_url(year: str) -> str:
@@ -901,6 +1320,9 @@ def ensure_url_zip(path: Path, download_url: str) -> Path:
 
 
 def ensure_census_block_group_zip(year: str, state_fips: str) -> Path:
+    bundled_path = bundled_slo_block_group_path()
+    if bundled_path.exists() and bundled_path.stat().st_size > 0:
+        return bundled_path
     zip_path = default_census_zip_path(year, state_fips)
     return ensure_url_zip(zip_path, census_block_group_url(year, state_fips))
 
@@ -1343,7 +1765,7 @@ def render_map_legend(
     st.markdown(legend_html, unsafe_allow_html=True)
 
 
-def render_heatmap_legend(metric_label: str) -> None:
+def render_heatmap_legend(metric_label: str, heat_metric: str) -> None:
     render_map_legend(
         "Map legend",
         [("Business point", [27, 96, 86, 150], "dot")],
@@ -1352,7 +1774,7 @@ def render_heatmap_legend(metric_label: str) -> None:
             [[255, 255, 178, 210], [254, 204, 92, 220], [253, 141, 60, 225], [189, 0, 38, 225]],
             "Higher heat",
         ),
-        note=f"Heat reflects {metric_label.lower()} density; map colors use the default heatmap style.",
+        note=f"Heat compares {heat_metric.lower()}; business dots and tables still use {metric_label.lower()}.",
     )
 
 
@@ -1446,6 +1868,7 @@ def style_block_groups(block_summary, metric_name: str, selected_geoid: str | No
 
 def build_business_heat_map(
     map_df: pd.DataFrame,
+    heat_df: pd.DataFrame,
     radius_pixels: int,
     intensity: float,
     threshold: float,
@@ -1464,9 +1887,16 @@ def build_business_heat_map(
         bearing=0,
     )
 
+    heat_source = heat_df.copy() if heat_df is not None and not heat_df.empty else map_df.copy()
+    if "heat_weight" not in heat_source.columns:
+        heat_source["heat_weight"] = pd.to_numeric(
+            heat_source.get("selected_waste_tons", 0),
+            errors="coerce",
+        ).fillna(0)
+
     heat_layer = pdk.Layer(
         "HeatmapLayer",
-        data=map_df,
+        data=heat_source,
         get_position="[longitude, latitude]",
         get_weight="heat_weight",
         radiusPixels=radius_pixels,
@@ -1477,6 +1907,7 @@ def build_business_heat_map(
 
     point_layer = pdk.Layer(
         "ScatterplotLayer",
+        id="heatmap-business-points",
         data=map_df,
         get_position="[longitude, latitude]",
         get_radius="point_radius",
@@ -1721,6 +2152,26 @@ def selected_geoid_from_pydeck_event(event) -> str | None:
     return str(geoid)
 
 
+def selected_business_id_from_pydeck_event(event) -> int | None:
+    try:
+        objects = event.selection.get("objects", {})
+    except Exception:
+        return None
+
+    business_objects = objects.get("heatmap-business-points", [])
+    if not business_objects:
+        return None
+    selected_object = business_objects[0]
+    properties = selected_object.get("properties", selected_object)
+    row_id = properties.get("_business_row_id")
+    if row_id is None or pd.isna(row_id):
+        return None
+    try:
+        return int(row_id)
+    except (TypeError, ValueError):
+        return None
+
+
 def selected_block_group_label(block_summary, selected_geoid: str | None) -> str:
     if not selected_geoid:
         return ""
@@ -1775,13 +2226,14 @@ def material_driver_table(
 
         rows.append(
             {
+                "Material Group": material_group(material),
                 "Material": format_material_name(material),
                 "Selected Waste Tons": float(tons),
             }
         )
 
     if not rows:
-        return pd.DataFrame(columns=["Material", "Selected Waste Tons"])
+        return pd.DataFrame(columns=["Material Group", "Material", "Selected Waste Tons"])
     return pd.DataFrame(rows).sort_values("Selected Waste Tons", ascending=False)
 
 
@@ -2850,16 +3302,42 @@ def estimate_haul_flows(
         flows["route_miles"] = flows["estimated_route_miles"]
         flows["distance_source"] = ROAD_DISTANCE_ESTIMATE_MODE
 
-    if allocation_mode == "Nearest landfill":
+    if "Hauler" in flows.columns:
+        flows["Hauler Facility Rule"] = flows["Hauler"].map(hauler_facility_rule).fillna("")
+    else:
+        flows["Hauler Facility Rule"] = ""
+
+    inverse_distance = 1 / np.power(flows["route_miles"].clip(lower=0.5), 1.25)
+    flows["distance_wasteshed_raw_weight"] = flows["Planning Share"] * inverse_distance
+    distance_wasteshed_denominator = flows.groupby("_business_row_id")["distance_wasteshed_raw_weight"].transform("sum")
+    flows["distance_wasteshed_weight"] = np.where(
+        distance_wasteshed_denominator > 0,
+        flows["distance_wasteshed_raw_weight"] / distance_wasteshed_denominator,
+        0.0,
+    )
+
+    if allocation_mode == HAULER_FACILITY_ALLOCATION_MODE:
+        rule_matched = flows["Hauler Facility Rule"].astype(str).str.len() > 0
+        flows["allocation_weight"] = np.where(
+            rule_matched,
+            np.where(flows["Landfill"].astype(str) == flows["Hauler Facility Rule"].astype(str), 1.0, 0.0),
+            flows["distance_wasteshed_weight"],
+        )
+        flows["allocation_source"] = np.where(
+            rule_matched,
+            "Hauler facility rule",
+            "Fallback: distance + wasteshed share",
+        )
+    elif allocation_mode == "Nearest landfill":
         min_distance = flows.groupby("_business_row_id")["route_miles"].transform("min")
         flows["allocation_weight"] = np.where(flows["route_miles"] == min_distance, 1.0, 0.0)
+        flows["allocation_source"] = "Nearest landfill"
     elif allocation_mode == "Wasteshed share only":
         flows["allocation_weight"] = flows["Planning Share"]
+        flows["allocation_source"] = "Wasteshed share only"
     else:
-        inverse_distance = 1 / np.power(flows["route_miles"].clip(lower=0.5), 1.25)
-        flows["raw_weight"] = flows["Planning Share"] * inverse_distance
-        denominator = flows.groupby("_business_row_id")["raw_weight"].transform("sum")
-        flows["allocation_weight"] = np.where(denominator > 0, flows["raw_weight"] / denominator, 0.0)
+        flows["allocation_weight"] = flows["distance_wasteshed_weight"]
+        flows["allocation_source"] = "Distance + wasteshed share"
 
     flows["flow_tons"] = flows["selected_waste_tons"] * flows["allocation_weight"]
     flows = flows[flows["flow_tons"] > 0].copy()
@@ -2883,6 +3361,8 @@ def estimate_haul_flows(
         + flows["vehicle_miles"].map(lambda value: f"{value:,.0f}")
         + "<br/>Distance source: "
         + flows["distance_source"].fillna("")
+        + "<br/>Assignment: "
+        + flows["allocation_source"].fillna("")
         + "<br/>CO2e: "
         + flows["co2e_metric_tons"].map(lambda value: f"{value:,.2f}")
         + " metric tons"
@@ -2900,8 +3380,16 @@ def estimate_haul_flows(
             "color_g",
             "color_b",
             "color_a",
+            "allocation_source",
+            "Hauler Facility Rule",
         ]
-    ].rename(columns={"route_miles": "dominant_route_miles"})
+    ].rename(
+        columns={
+            "route_miles": "dominant_route_miles",
+            "allocation_source": "dominant_allocation_source",
+            "Hauler Facility Rule": "dominant_hauler_facility_rule",
+        }
+    )
     business_rollup = business.merge(
         dominant_business_fields,
         on="_business_row_id",
@@ -2917,6 +3405,7 @@ def estimate_haul_flows(
             co2e_metric_tons=("co2e_metric_tons", "sum"),
             load_co2e_metric_tons=("load_co2e_metric_tons", "sum"),
             distance_source=("distance_source", most_common_text),
+            allocation_source=("allocation_source", most_common_text),
         )
         .reset_index()
     )
@@ -2939,6 +3428,8 @@ def estimate_haul_flows(
         )
         + "<br/>One-way miles to assumed landfill: "
         + business_rollup["dominant_route_miles"].fillna(0).map(lambda value: f"{value:,.1f}")
+        + "<br/>Assignment: "
+        + business_rollup["allocation_source"].fillna("")
         + "<br/>Truckload-equivalent trips: "
         + business_rollup["truckload_equivalent_trips"].fillna(0).map(lambda value: f"{value:,.2f}")
         + "<br/>Annual vehicle miles: "
@@ -3608,6 +4099,242 @@ def infrastructure_swimlane_table() -> pd.DataFrame:
     )
 
 
+def assumptions_register() -> pd.DataFrame:
+    """Living register of active DSS assumptions, transformations, and validation needs."""
+    rows = [
+        (
+            "Data intake", "Source snapshot", "The integrated workbook is the analysis snapshot; the dashboard does not query live SMART1383, Mergent, CalRecycle, or hauler systems.", "Results reflect the workbook version selected in the sidebar.", "Active model rule",
+        ),
+        (
+            "Data intake", "Record grain", "Each integrated workbook row is retained as a business/planner record; the dashboard does not apply an additional de-duplication pass.", "Duplicate or changed source records can affect totals and should be resolved upstream using source row, name, address, and D-U-N-S evidence.", "Validation needed",
+        ),
+        (
+            "Data intake", "Business identity enrichment", "SMART1383 business context is connected to Mergent company, address, industry, employee, and D-U-N-S attributes through the integrated-workbook matching process.", "Uncertain matches should be audited before individual business outreach or compliance use.", "Validation needed",
+        ),
+        (
+            "Data intake", "Missing descriptive fields", "Missing business name, jurisdiction, or business-group values are displayed as 'Unnamed business' or 'Unknown'.", "This prevents failed dashboard rows but does not repair the underlying source data.", "Active model rule",
+        ),
+        (
+            "Data intake", "Numeric parsing", "Dashboard calculations coerce unreadable numeric values to missing and generally treat missing modeled tonnage as zero in aggregate calculations.", "A zero can mean no modeled tonnage or unavailable input; inspect source/status fields when that distinction matters.", "Active model rule",
+        ),
+        (
+            "Classification", "Jurisdiction and business-group selection", "The selected workbook fields are treated as the current planning classification; users can switch among available SMART1383 and CalRecycle fields.", "Changing the selected field can change filters, profiles, and rollups.", "User-selectable",
+        ),
+        (
+            "Classification", "Industry slicing", "Industry filters match exact displayed NAICS/SIC descriptions or line-of-business text, including any selected field when 'Any NAICS/SIC description' is used.", "Industry descriptions are screening context, not a verified operating-process classification.", "Active model rule",
+        ),
+        (
+            "Waste estimation", "Profile basis", "CalRecycle calculator profiles by jurisdiction and business group are treated as representative waste-generation and material-composition factors.", "These are modeled estimates, not measured service-level tonnage for an individual business.", "Planning default",
+        ),
+        (
+            "Waste estimation", "Suppressed-profile coverage", "When a local CalRecycle profile is suppressed, the integrated model uses a countywide profile for the same business group.", "Protects coverage but may not represent the local jurisdiction's actual waste mix.", "Planning default",
+        ),
+        (
+            "Waste estimation", "Per-business scaling", "Profile factors are scaled to businesses using the integrated CalRecycle scaling output and available employee-count context.", "Employee counts and profile factors should be refreshed when business size or operations materially change.", "Planning default",
+        ),
+        (
+            "Waste estimation", "Annual units", "Waste, landfill, diversion, and transport figures are interpreted as annual short tons unless a dashboard label states otherwise.", "Do not compare directly to monthly bills or route tickets without matching time units.", "Active model rule",
+        ),
+        (
+            "Waste estimation", "Material completeness", "Only material/stream columns recognized from the integrated CalRecycle naming pattern are included in material-specific outputs.", "Unrecognized or newly added material columns require a model update before they appear.", "Validation needed",
+        ),
+        (
+            "Spatial processing", "Coordinate source", "Business coordinates supplied in the integrated workbook are used as the business location; no address-level geocoding is performed in the dashboard.", "A point can be inaccurate even when it is within the county envelope.", "Validation needed",
+        ),
+        (
+            "Spatial processing", "Coordinate quality screen", "Mapped records require numeric latitude/longitude, non-zero values, and locations within the configured San Luis Obispo County planning envelope.", "Records outside that envelope remain in non-map calculations but are excluded from maps, spatial joins, and transport-distance estimates.", "Active model rule",
+        ),
+        (
+            "Spatial processing", "Census geography", "Block-group boundaries use Census TIGER/Line 2023 California data filtered to County FIPS 079; ZCTAs use Census 2020 cartographic boundaries.", "Census places/CDPs are a proxy for jurisdiction/community overlays, not legal city, CSD, or sanitary-district boundaries.", "Planning default",
+        ),
+        (
+            "Spatial processing", "Block-group assignment", "Businesses are assigned to the polygon containing their mapped point.", "Boundary-edge points and inaccurate coordinates can be assigned to the wrong geography.", "Validation needed",
+        ),
+        (
+            "Aggregate reporting", "Multifamily treatment", "Multifamily records stay available in business-level displays but are excluded from aggregate ICI metrics, heat intensity, block-group rankings, diversion summaries, and study-validation totals.", "This keeps commercial/ICI comparisons aligned to the study basis while preserving planner visibility.", "Active model rule",
+        ),
+        (
+            "Diversion analysis", "Diversion potential", "Landfill-disposed material tons are mapped to curbside recycle, curbside organics, third-party diversion, or not-readily-recoverable pathways using the dashboard material mapping.", "A mapped pathway is a screening opportunity, not proof of service availability, contamination acceptance, economics, or business participation.", "Planning default",
+        ),
+        (
+            "Diversion analysis", "Thresholding", "The dashboard's minimum opportunity tons and minimum share of landfill controls define which businesses are counted as practical outreach targets.", "Thresholds change target counts and rankings; they do not change the underlying modeled tons.", "User-selectable",
+        ),
+        (
+            "Diversion analysis", "Study-calibrated mode", "Calibrated mode rescales destination totals to the 2025 ICI study pathway shares while preserving the workbook-based rank order within each pathway.", "Use raw mode for the workbook estimate; calibration improves aggregate alignment but is not a business-level measurement.", "Planning default",
+        ),
+        (
+            "Study validation", "ICI comparison denominator", "The validation dashboard compares the model to the 2025 SLO County ICI study sector basis of 34,280 tons and also displays the 57,705-ton table basis where relevant.", "The report contains different denominators; shares are used for calibration and both values are disclosed.", "Active model rule",
+        ),
+        (
+            "Landfill allocation", "Known hauler destinations", "Waste Connections garbage is assigned to Cold Canyon; Waste Management/WM to Chicago Grade; Paso Robles Waste and San Miguel Garbage to the City of Paso Robles Landfill.", "These assignments reflect the County/IWMA-provided operating information and apply only to recognized trash-hauler text.", "Source-provided rule",
+        ),
+        (
+            "Landfill allocation", "Unknown-hauler fallback", "Blank or unrecognized haulers use a distance-and-wasteshed allocation among the three mapped landfills.", "Fallback assignments are explicitly labeled and should be replaced when hauler/facility evidence becomes available.", "Planning default",
+        ),
+        (
+            "Landfill allocation", "Planning shares", "Fallback allocation uses 2019 mapped wasteshed shares: Cold Canyon 51.0%, Chicago Grade 31.5%, and City of Paso Robles 14.2%, normalized across the three mapped facilities.", "The smaller 'other facilities not mapped' share is excluded from this three-landfill fallback; use facility/hauler tonnage when available.", "Planning default",
+        ),
+        (
+            "Transport emissions", "Distance method", "The Diversion opportunity transport extension estimates one-way road miles as straight-line business-to-assigned-landfill distance multiplied by the user-selected road-mile multiplier (default 1.25).", "This is not a stop-by-stop collection-route simulation. Census TIGER and OpenStreetMap road-network options are available in the Circular Flow engine for route-network estimates.", "Planning default",
+        ),
+        (
+            "Transport emissions", "Shared truck payload", "Annual business garbage tons are divided by the user-selected average collection load (default 7 short tons, or 14,000 lb) to allocate truckload-equivalent trips.", "The model does not assign one dedicated weekly truck trip to every business.", "Planning default",
+        ),
+        (
+            "Transport emissions", "Operational route adjustment", "Allocated vehicle miles equal one-way miles × truckload-equivalent trips × the user-selected collection-route adjustment (default 1.15).", "The adjustment approximates collection circulation, staging, and return movement; it does not reproduce actual hauler route sequences.", "Planning default",
+        ),
+        (
+            "Transport emissions", "Vehicle-mile emissions factor", "Truck CO2e equals allocated annual vehicle miles × the user-selected factor (default 4.1 kg CO2e per vehicle-mile), converted to metric tons.", "Replace with fleet-specific fuel, vehicle, telematics, or MOVES factors for operational accounting.", "Planning default",
+        ),
+        (
+            "Circular economy", "Supplier signal", "Potential suppliers are businesses with modeled landfill-disposed tons of selected materials.", "The signal does not establish material quality, ownership, availability, or willingness to exchange.", "Planning default",
+        ),
+        (
+            "Circular economy", "Potential-user signal", "Potential users are inferred from business group, NAICS/SIC descriptions, line-of-business text, and business-name keywords.", "A keyword/industry match is not confirmation of procurement demand or technical compatibility.", "Validation needed",
+        ),
+    ]
+    table = pd.DataFrame(
+        rows,
+        columns=["Stage", "Assumption / decision", "Implementation", "Effect / validation need", "Status"],
+    )
+    dashboard_map = {
+        "Data intake": "All dashboards; Data infrastructure",
+        "Classification": "Business heat map; Census block groups; Diversion opportunity; Outreach campaign builder; Circular economy marketplace; Circular flow engine",
+        "Waste estimation": "Home; Business heat map; Census block groups; Diversion opportunity; Outreach campaign builder; Circular economy marketplace; Circular flow engine; 2025 study vs model",
+        "Spatial processing": "Business heat map; Census block groups; Diversion opportunity; Circular economy marketplace; Circular flow engine",
+        "Aggregate reporting": "Home; Business heat map; Census block groups; Diversion opportunity; 2025 study vs model",
+        "Diversion analysis": "Diversion opportunity; Outreach campaign builder; 2025 study vs model",
+        "Study validation": "2025 study vs model; Diversion opportunity",
+        "Landfill allocation": "Diversion opportunity; Circular flow engine",
+        "Transport emissions": "Diversion opportunity; Circular flow engine",
+        "Circular economy": "Circular economy marketplace",
+    }
+    table["Relevant dashboards"] = table["Stage"].map(dashboard_map).fillna("Assumptions")
+    return table[
+        [
+            "Stage",
+            "Relevant dashboards",
+            "Assumption / decision",
+            "Implementation",
+            "Effect / validation need",
+            "Status",
+        ]
+    ]
+
+
+def navigate_to_assumption_dashboard() -> None:
+    target = st.session_state.get("assumptions_dashboard_target")
+    if target in DASHBOARD_OPTIONS:
+        st.session_state.dashboard_view = target
+
+
+def open_guide_dashboard(target: str) -> None:
+    if target in DASHBOARD_OPTIONS:
+        st.session_state.dashboard_view = target
+
+
+def render_quick_start_guide() -> None:
+    """Render the planner-facing onboarding page and dashboard launch points."""
+    st.markdown(
+        """
+        <style>
+        .guide-hero { background: linear-gradient(118deg, #1f5f8b 0%, #245e63 49%, #4f7f3f 100%); border-radius: 18px; color: white; padding: 32px 34px 30px; margin: 6px 0 22px; box-shadow: 0 12px 28px rgba(31, 95, 139, 0.18); }
+        .guide-eyebrow { font-size: 0.76rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #d8ecdb; margin-bottom: 8px; }
+        .guide-hero h2 { color: white; margin: 0 0 9px; font-size: 2rem; line-height: 1.14; }
+        .guide-hero p { color: #edf7f1; font-size: 1.05rem; max-width: 750px; margin: 0; line-height: 1.55; }
+        .guide-section-label { color: #1f5f8b; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; margin: 25px 0 4px; }
+        .guide-choice { background: #ffffff; border: 1px solid #dce5df; border-radius: 14px; padding: 19px 19px 14px; min-height: 192px; box-shadow: 0 3px 10px rgba(43, 61, 49, 0.06); }
+        .guide-choice-number { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; background: #e8f1e5; color: #386a30; font-weight: 700; font-size: 0.87rem; margin-bottom: 11px; }
+        .guide-choice h3 { color: #243d32; font-size: 1.06rem; margin: 0 0 8px; }
+        .guide-choice p { color: #5b6960; font-size: 0.9rem; line-height: 1.45; margin: 0; }
+        .guide-path { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 12px 0 7px; }
+        .guide-step { position: relative; padding: 15px 13px 15px 17px; border-left: 4px solid #82a95a; background: #f7faf6; min-height: 122px; }
+        .guide-step strong { color: #264738; display: block; margin-bottom: 5px; font-size: 0.94rem; }
+        .guide-step span { color: #627066; font-size: 0.84rem; line-height: 1.36; }
+        .guide-use { background: #f6f9fb; border-radius: 12px; padding: 16px 17px; min-height: 130px; border-top: 3px solid #1f5f8b; }
+        .guide-use h3 { font-size: 0.97rem; color: #27475f; margin: 0 0 7px; }
+        .guide-use p { font-size: 0.87rem; line-height: 1.42; color: #53636c; margin: 0; }
+        @media (max-width: 760px) { .guide-hero { padding: 24px 22px; } .guide-hero h2 { font-size: 1.55rem; } .guide-path { grid-template-columns: 1fr; } .guide-choice { min-height: auto; } }
+        </style>
+        <section class="guide-hero" aria-labelledby="guide-title">
+          <div class="guide-eyebrow">San Luis Obispo County · planning support</div>
+          <h2 id="guide-title">Turn business waste data into a practical next move.</h2>
+          <p>Start with the planning question you need to answer. This tool estimates where waste is generated, what may be divertible, and where a focused conversation could have the greatest value.</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.subheader("Watch the walkthrough")
+    if TUTORIAL_VIDEO_PATH.exists():
+        st.video(str(TUTORIAL_VIDEO_PATH), format="video/mp4")
+        st.caption("A short walkthrough of the IWMA Decision Support System Prototype and its planner-facing dashboards.")
+    else:
+        st.info("The tutorial video is not included in this deployment yet.")
+
+    st.markdown("<div class='guide-section-label'>Choose your starting point</div>", unsafe_allow_html=True)
+    priority_col, diversion_col, evidence_col = st.columns(3)
+    with priority_col:
+        st.markdown(
+            """<div class="guide-choice"><div class="guide-choice-number">1</div><h3>Find priority places</h3><p>See where modeled tons, business intensity, or concentrated generators point to a useful geographic focus.</p></div>""",
+            unsafe_allow_html=True,
+        )
+        if "Business heat map" in DASHBOARD_OPTIONS:
+            st.button("Explore priority places", key="guide_heat", on_click=open_guide_dashboard, args=("Business heat map",), width="stretch")
+    with diversion_col:
+        st.markdown(
+            """<div class="guide-choice"><div class="guide-choice-number">2</div><h3>Build a diversion action</h3><p>Identify businesses and materials with modeled landfill-disposed tons that may have a practical diversion pathway.</p></div>""",
+            unsafe_allow_html=True,
+        )
+        if "Diversion opportunity" in DASHBOARD_OPTIONS:
+            st.button("Find diversion opportunities", key="guide_diversion", on_click=open_guide_dashboard, args=("Diversion opportunity",), width="stretch")
+    with evidence_col:
+        st.markdown(
+            """<div class="guide-choice"><div class="guide-choice-number">3</div><h3>Check evidence and limits</h3><p>Review sources, active assumptions, validation needs, and the distinction between model estimates and verified operations.</p></div>""",
+            unsafe_allow_html=True,
+        )
+        if "Assumptions" in DASHBOARD_OPTIONS:
+            st.button("Review assumptions", key="guide_assumptions", on_click=open_guide_dashboard, args=("Assumptions",), width="stretch")
+
+    st.markdown("<div class='guide-section-label'>A simple planning workflow</div>", unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="guide-path" aria-label="Four-step planning workflow">
+          <div class="guide-step"><strong>1. Frame the question</strong><span>Choose a jurisdiction, business group, material, or landfill concern you want to explore.</span></div>
+          <div class="guide-step"><strong>2. Find a signal</strong><span>Use maps and ranked drivers to locate a concentrated, high-tonnage, or high-opportunity pattern.</span></div>
+          <div class="guide-step"><strong>3. Read the caveat</strong><span>Check the confidence label, assumptions, and whether the number is modeled, source-provided, or needs validation.</span></div>
+          <div class="guide-step"><strong>4. Validate and act</strong><span>Confirm promising sites with haulers, businesses, service data, or field outreach before using the result operationally.</span></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<div class='guide-section-label'>How to use the results responsibly</div>", unsafe_allow_html=True)
+    use_cols = st.columns(3)
+    use_content = [
+        ("Use it to prioritize", "Use modeled tons and concentrations to decide where a conversation, site review, or campaign could be most worthwhile."),
+        ("Do not treat it as a bill", "Business-level tonnage and diversion results are estimates from profiles and scaling—not measured service-account data."),
+        ("Keep the next step human", "The strongest workflow is model signal → operational confirmation → targeted action, with assumptions visible at every step."),
+    ]
+    for column, (heading, body) in zip(use_cols, use_content):
+        with column:
+            st.markdown(f"<div class='guide-use'><h3>{heading}</h3><p>{body}</p></div>", unsafe_allow_html=True)
+
+    st.markdown("<div class='guide-section-label'>Dashboard guide</div>", unsafe_allow_html=True)
+    dashboard_guide = pd.DataFrame(
+        [
+            ("Business heat map", "Where are modeled waste signals concentrated?", "Tonnage intensity, business density, and high-volume locations", "Coordinate quality and modeled waste estimates"),
+            ("Census block groups", "Which small areas should be compared?", "Block-group rankings and selected-area business drivers", "Point-in-polygon assignment and Census geography"),
+            ("Diversion opportunity", "Which businesses or materials warrant outreach?", "Ranked opportunities, pathways, landfill transport, and exports", "Diversion is a screening signal; verify service and material acceptance"),
+            ("Assumptions", "What is the model assuming?", "Rules, defaults, validation priorities, and dashboard crosswalk", "A living register; use it alongside planning decisions"),
+            ("2025 study vs model", "How does the model compare with the county study?", "Material and pathway gaps, denominators, and diagnostic calibration", "Comparison is diagnostic, not a claim of measured accuracy"),
+        ],
+        columns=["Dashboard", "Best planning question", "What you get", "Read before acting"],
+    )
+    dashboard_guide = dashboard_guide[dashboard_guide["Dashboard"].isin(DASHBOARD_OPTIONS)]
+    st.dataframe(dashboard_guide, width="stretch", hide_index=True, height=260)
+    st.caption("Tip: use the left-side filters first when you already know the jurisdiction, business group, or industry you want to investigate.")
+
+
 def render_infrastructure_hierarchy(metrics: dict[str, int]) -> None:
     cards = [
         (
@@ -3768,6 +4495,965 @@ def iwma_destination_bar_chart(
             tooltip=tooltips,
         )
         .properties(height=height)
+    )
+
+
+def study_alignment_score(group_composition: pd.DataFrame) -> float:
+    if group_composition.empty:
+        return 0.0
+    differences = pd.to_numeric(group_composition.get("Difference (pp)", pd.Series(dtype=float)), errors="coerce")
+    total_variation_gap = float(differences.abs().sum()) / 2
+    return float(np.clip(100 - total_variation_gap, 0, 100))
+
+
+def alignment_label(score: float) -> str:
+    if score >= 85:
+        return "High alignment"
+    if score >= 70:
+        return "Moderate alignment"
+    return "Needs validation"
+
+
+def confidence_label(kind: str) -> str:
+    labels = {
+        "source": "high confidence",
+        "model": "model estimate",
+        "validation": "needs validation",
+    }
+    return labels.get(kind, "model estimate")
+
+
+def render_confidence_badge(label: str, kind: str) -> str:
+    colors = {
+        "source": ("#e9f2e7", IWMA_GREEN),
+        "model": ("#e8f0f6", IWMA_BLUE),
+        "validation": ("#f2edf7", IWMA_PURPLE),
+    }
+    background, color = colors.get(kind, colors["model"])
+    return (
+        f"<span style='display:inline-block;padding:0.18rem 0.55rem;border-radius:999px;"
+        f"background:{background};color:{color};font-size:0.78rem;font-weight:650;'>"
+        f"{html.escape(label)}</span>"
+    )
+
+
+def render_metric_confidence_labels(rows: list[dict[str, str]]) -> None:
+    card_html = "".join(
+        "<div style='border:1px solid #dfe4de;border-radius:8px;padding:0.65rem 0.75rem;background:#fff;'>"
+        f"<div style='font-weight:650;color:#30342f;margin-bottom:0.25rem;'>{html.escape(row['Metric'])}</div>"
+        f"{render_confidence_badge(row['Confidence'], row['Kind'])}"
+        f"<div style='font-size:0.82rem;color:#5f6762;margin-top:0.35rem;'>{html.escape(row['Basis'])}</div>"
+        "</div>"
+        for row in rows
+    )
+    st.markdown(
+        "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:0.7rem;'>"
+        + card_html
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def home_briefing_insights(
+    opportunity: pd.DataFrame,
+    destination_rollup: pd.DataFrame,
+    material_detail: pd.DataFrame,
+    business_group_rollup: pd.DataFrame,
+    group_composition: pd.DataFrame,
+    focused_opportunity: pd.DataFrame,
+    organics_tons: float,
+    methane_co2e: float,
+    alignment_score_value: float,
+) -> list[dict[str, str]]:
+    insights: list[dict[str, str]] = []
+    if not destination_rollup.empty:
+        top_destination = destination_rollup.iloc[0]
+        insights.append(
+            {
+                "Title": f"{top_destination['Destination']} is the largest diversion pathway",
+                "Value": f"{float(top_destination[POTENTIAL_TONS_COLUMN]):,.1f} modeled tons",
+                "Detail": "Use this to choose the first outreach pathway for the current slice.",
+                "Kind": "validation",
+            }
+        )
+    if not business_group_rollup.empty:
+        top_group = business_group_rollup.iloc[0]
+        insights.append(
+            {
+                "Title": f"{top_group['Business Group']} leads business-group opportunity",
+                "Value": f"{float(top_group[POTENTIAL_TONS_COLUMN]):,.1f} modeled tons",
+                "Detail": f"{int(top_group['Businesses']):,} businesses in this group contribute to the signal.",
+                "Kind": "model",
+            }
+        )
+    if not material_detail.empty:
+        top_material = (
+            material_detail.groupby(["Material", "Destination"], dropna=False)[POTENTIAL_TONS_COLUMN]
+            .sum()
+            .reset_index()
+            .sort_values(POTENTIAL_TONS_COLUMN, ascending=False)
+            .head(1)
+        )
+        if not top_material.empty:
+            row = top_material.iloc[0]
+            insights.append(
+                {
+                    "Title": f"{row['Material']} is the top material signal",
+                    "Value": f"{float(row[POTENTIAL_TONS_COLUMN]):,.1f} modeled tons",
+                    "Detail": f"Recommended pathway: {row['Destination']}.",
+                    "Kind": "validation",
+                }
+            )
+    if not group_composition.empty:
+        gap_row = group_composition.sort_values("Abs Difference (pp)", ascending=False).head(1)
+        if not gap_row.empty:
+            row = gap_row.iloc[0]
+            insights.append(
+                {
+                    "Title": f"{row['Material Group']} is the largest study-alignment gap",
+                    "Value": f"{float(row['Difference (pp)']):+.1f} percentage points",
+                    "Detail": "This is the first place to audit workbook allocation assumptions.",
+                    "Kind": "validation",
+                }
+            )
+    insights.append(
+        {
+            "Title": "Organics diversion has near-term methane relevance",
+            "Value": f"{methane_co2e:,.1f} 20-year CO2e tons",
+            "Detail": f"Based on {organics_tons:,.1f} modeled organics tons in landfill.",
+            "Kind": "model",
+        }
+    )
+    insights.append(
+        {
+            "Title": f"{len(focused_opportunity):,} businesses meet the outreach threshold",
+            "Value": f"{alignment_score_value:.0f}% study alignment",
+            "Detail": "Use the action queue below to turn this into campaign lists.",
+            "Kind": "model",
+        }
+    )
+    return insights[:5]
+
+
+def render_briefing_cards(insights: list[dict[str, str]]) -> None:
+    if not insights:
+        st.warning("No briefing insights are available for the current slice.")
+        return
+    card_html = "".join(
+        "<div style='border:1px solid #dfe4de;border-radius:8px;padding:0.85rem;background:#fff;'>"
+        f"{render_confidence_badge(confidence_label(insight['Kind']), insight['Kind'])}"
+        f"<div style='font-size:1rem;font-weight:700;color:#30342f;margin-top:0.55rem;'>"
+        f"{html.escape(insight['Title'])}</div>"
+        f"<div style='font-size:1.15rem;font-weight:750;color:{IWMA_BLUE};margin-top:0.35rem;'>"
+        f"{html.escape(insight['Value'])}</div>"
+        f"<div style='font-size:0.86rem;color:#5f6762;margin-top:0.35rem;line-height:1.25rem;'>"
+        f"{html.escape(insight['Detail'])}</div>"
+        "</div>"
+        for insight in insights
+    )
+    st.markdown(
+        "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:0.8rem;'>"
+        + card_html
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def home_sankey_links(stream_totals: pd.DataFrame, opportunity: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    stream_tons = dict(zip(stream_totals["Waste Stream"], stream_totals["Tons"])) if not stream_totals.empty else {}
+    for stream_label in ["Landfill", "Recycle", "Organics", "Diversion"]:
+        tons = float(stream_tons.get(stream_label, 0.0))
+        if tons > 0:
+            rows.append({"Source": "Total generation", "Target": stream_label, "Tons": tons})
+
+    landfill_destination_labels = {
+        "curbside_recycle": "Curbside recycle opportunity",
+        "curbside_organics": "Curbside organics opportunity",
+        "third_party_diversion": "Third-party diversion opportunity",
+        "not_readily_recoverable": "Not readily recoverable",
+    }
+    for destination, label in landfill_destination_labels.items():
+        if destination in opportunity.columns:
+            tons = float(pd.to_numeric(opportunity[destination], errors="coerce").fillna(0).sum())
+            if tons > 0:
+                rows.append({"Source": "Landfill", "Target": label, "Tons": tons})
+
+    passthroughs = {
+        "Recycle": "Already in recycle stream",
+        "Organics": "Already in organics stream",
+        "Diversion": "Existing other diversion",
+    }
+    for source, target in passthroughs.items():
+        tons = float(stream_tons.get(source, 0.0))
+        if tons > 0:
+            rows.append({"Source": source, "Target": target, "Tons": tons})
+    return pd.DataFrame(rows)
+
+
+def sankey_node_color(label: str) -> str:
+    lowered = label.lower()
+    if "organics" in lowered:
+        return IWMA_GREEN
+    if "recycle" in lowered:
+        return IWMA_BLUE
+    if "third" in lowered or "diversion" in lowered:
+        return IWMA_PURPLE
+    if "landfill" in lowered or "not readily" in lowered:
+        return IWMA_GRAY
+    return IWMA_LIGHT_GREEN
+
+
+def render_svg_sankey(links: pd.DataFrame) -> None:
+    if links.empty:
+        return
+    width = 980
+    height = 430
+    columns = {
+        "Total generation": 80,
+        "Landfill": 360,
+        "Recycle": 360,
+        "Organics": 360,
+        "Diversion": 360,
+    }
+    target_labels = [label for label in links["Target"].unique().tolist() if label not in columns]
+    stream_labels = ["Landfill", "Recycle", "Organics", "Diversion"]
+    stream_y = {
+        label: y
+        for label, y in zip(stream_labels, np.linspace(95, height - 95, len(stream_labels)))
+        if label in set(links["Source"]).union(set(links["Target"]))
+    }
+    target_y = {
+        label: y
+        for label, y in zip(target_labels, np.linspace(55, height - 55, max(len(target_labels), 1)))
+    }
+    positions = {"Total generation": (80, height / 2)}
+    positions.update({label: (360, y) for label, y in stream_y.items()})
+    positions.update({label: (710, y) for label, y in target_y.items()})
+
+    max_tons = max(float(links["Tons"].max()), 1.0)
+    paths = []
+    for _, row in links.iterrows():
+        source = row["Source"]
+        target = row["Target"]
+        if source not in positions or target not in positions:
+            continue
+        x1, y1 = positions[source]
+        x2, y2 = positions[target]
+        stroke_width = max(2.0, min(34.0, float(row["Tons"]) / max_tons * 34.0))
+        color = sankey_node_color(target)
+        paths.append(
+            f"<path d='M{x1 + 16},{y1} C{x1 + 145},{y1} {x2 - 145},{y2} {x2 - 16},{y2}' "
+            f"fill='none' stroke='{color}' stroke-opacity='0.24' stroke-width='{stroke_width:.2f}' />"
+        )
+
+    nodes = []
+    for label, (x, y) in positions.items():
+        incoming = links.loc[links["Target"] == label, "Tons"].sum()
+        outgoing = links.loc[links["Source"] == label, "Tons"].sum()
+        tons = float(max(incoming, outgoing))
+        node_height = max(20, min(72, tons / max_tons * 72))
+        color = sankey_node_color(label)
+        label_x = x + 24 if x < 650 else x + 24
+        label_anchor = "start"
+        tons_text = f"{tons:,.0f} tons" if tons > 0 else ""
+        nodes.append(
+            f"<rect x='{x - 8}' y='{y - node_height / 2:.1f}' width='16' height='{node_height:.1f}' "
+            f"rx='4' fill='{color}' />"
+            f"<text x='{label_x}' y='{y - 3:.1f}' text-anchor='{label_anchor}' "
+            f"font-size='12' font-weight='700' fill='#30342f'>{html.escape(label)}</text>"
+            f"<text x='{label_x}' y='{y + 13:.1f}' text-anchor='{label_anchor}' "
+            f"font-size='11' fill='#5f6762'>{html.escape(tons_text)}</text>"
+        )
+
+    svg = (
+        f"<div style='border:1px solid #dfe4de;border-radius:8px;background:white;padding:0.5rem;'>"
+        f"<svg viewBox='0 0 {width} {height}' width='100%' height='430' role='img' "
+        f"aria-label='Countywide Sankey flow overview'>"
+        + "".join(paths)
+        + "".join(nodes)
+        + "</svg></div>"
+    )
+    st.markdown(svg, unsafe_allow_html=True)
+
+
+def render_countywide_sankey(stream_totals: pd.DataFrame, opportunity: pd.DataFrame) -> None:
+    links = home_sankey_links(stream_totals, opportunity)
+    if links.empty:
+        st.warning("No generation-flow values are available for the current slice.")
+        return
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        render_svg_sankey(links)
+        return
+
+    labels = pd.Index(pd.concat([links["Source"], links["Target"]], ignore_index=True).unique()).tolist()
+    label_index = {label: index for index, label in enumerate(labels)}
+    colors = []
+    for label in labels:
+        if "organics" in label.lower():
+            colors.append(IWMA_GREEN)
+        elif "recycle" in label.lower():
+            colors.append(IWMA_BLUE)
+        elif "third" in label.lower() or "diversion" in label.lower():
+            colors.append(IWMA_PURPLE)
+        elif "landfill" in label.lower() or "not readily" in label.lower():
+            colors.append(IWMA_GRAY)
+        else:
+            colors.append(IWMA_LIGHT_GREEN)
+
+    fig = go.Figure(
+        data=[
+            go.Sankey(
+                arrangement="snap",
+                node={
+                    "pad": 16,
+                    "thickness": 16,
+                    "line": {"color": "rgba(80, 88, 82, 0.35)", "width": 0.5},
+                    "label": labels,
+                    "color": colors,
+                },
+                link={
+                    "source": links["Source"].map(label_index),
+                    "target": links["Target"].map(label_index),
+                    "value": links["Tons"],
+                    "color": "rgba(79, 127, 63, 0.22)",
+                },
+            )
+        ]
+    )
+    fig.update_layout(
+        height=420,
+        margin={"l": 8, "r": 8, "t": 12, "b": 8},
+        font={"size": 12, "color": "#30342f"},
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+    )
+    st.plotly_chart(fig, width="stretch")
+
+
+def home_action_queue(
+    material_detail: pd.DataFrame,
+    min_tons: float = DEFAULT_OPPORTUNITY_TON_THRESHOLD,
+) -> pd.DataFrame:
+    if material_detail.empty:
+        return pd.DataFrame(
+            columns=[
+                "Recommended Campaign",
+                "Preferred Destination",
+                "Business Group",
+                "Top Jurisdiction",
+                "Expected Tons Impacted",
+                "Businesses",
+                "Confidence",
+            ]
+        )
+    grouped = (
+        material_detail.groupby(["Destination", "Material", "Business Group"], dropna=False)
+        .agg(
+            **{
+                "Expected Tons Impacted": (POTENTIAL_TONS_COLUMN, "sum"),
+                "Businesses": ("_business_row_id", "nunique"),
+                "Top Jurisdiction": ("Jurisdiction", most_common_text),
+            }
+        )
+        .reset_index()
+    )
+    grouped = grouped[grouped["Expected Tons Impacted"] >= float(min_tons)].copy()
+    if grouped.empty:
+        return pd.DataFrame()
+    grouped["Recommended Campaign"] = (
+        grouped["Material"].astype(str)
+        + " outreach for "
+        + grouped["Business Group"].astype(str)
+    )
+    grouped["Preferred Destination"] = grouped["Destination"]
+    grouped["Confidence"] = "model estimate; validate with hauler/IWMA outreach"
+    return grouped[
+        [
+            "Recommended Campaign",
+            "Preferred Destination",
+            "Business Group",
+            "Top Jurisdiction",
+            "Expected Tons Impacted",
+            "Businesses",
+            "Confidence",
+        ]
+    ].sort_values("Expected Tons Impacted", ascending=False)
+
+
+def build_campaign_business_table(
+    opportunity: pd.DataFrame,
+    material_detail: pd.DataFrame,
+    filtered: pd.DataFrame,
+    latitude_column: str,
+    longitude_column: str,
+    selected_material_labels: list[str],
+    selected_destinations: list[str],
+    selected_business_groups: list[str],
+    min_tons: float,
+) -> pd.DataFrame:
+    if opportunity.empty or material_detail.empty:
+        return pd.DataFrame()
+
+    detail = material_detail.copy()
+    if selected_material_labels:
+        detail = detail[detail["Material"].isin(selected_material_labels)].copy()
+    if selected_destinations:
+        detail = detail[detail["Destination Key"].isin(selected_destinations)].copy()
+    if detail.empty:
+        return pd.DataFrame()
+
+    rollup = (
+        detail.groupby("_business_row_id", dropna=False)
+        .agg(
+            **{
+                "Campaign Opportunity Tons": (POTENTIAL_TONS_COLUMN, "sum"),
+                "Materials": ("Material", lambda values: ", ".join(pd.Series(values).dropna().astype(str).drop_duplicates().head(4))),
+                "Preferred Destinations": ("Destination", lambda values: ", ".join(pd.Series(values).dropna().astype(str).drop_duplicates().head(3))),
+                "Material Count": ("Material", "nunique"),
+            }
+        )
+        .reset_index()
+    )
+    top_detail = (
+        detail.sort_values(POTENTIAL_TONS_COLUMN, ascending=False)
+        .drop_duplicates("_business_row_id")
+        .loc[:, ["_business_row_id", "Material", "Destination", "Destination Key"]]
+        .rename(
+            columns={
+                "Material": "Top Campaign Material",
+                "Destination": "Top Campaign Destination",
+                "Destination Key": "Dominant Destination Key",
+            }
+        )
+    )
+    rollup = rollup.merge(top_detail, on="_business_row_id", how="left")
+
+    base_columns = [
+        "_business_row_id",
+        "Business",
+        "Jurisdiction",
+        "Business Group",
+        "ZIP Code",
+        "Hauler",
+        "Phone",
+        "Website",
+        "Address",
+        "Landfill Tons",
+    ]
+    base = opportunity[[column for column in base_columns if column in opportunity.columns]].copy()
+    rows = base.merge(rollup, on="_business_row_id", how="inner")
+
+    coords = filtered[["_business_row_id", latitude_column, longitude_column]].rename(
+        columns={latitude_column: "latitude", longitude_column: "longitude"}
+    )
+    rows = rows.merge(coords, on="_business_row_id", how="left")
+    rows["latitude"] = pd.to_numeric(rows["latitude"], errors="coerce")
+    rows["longitude"] = pd.to_numeric(rows["longitude"], errors="coerce")
+    rows = rows[valid_coordinate_mask(rows)].copy()
+
+    if selected_business_groups:
+        rows = rows[rows["Business Group"].astype(str).isin(selected_business_groups)].copy()
+
+    rows["Campaign Opportunity Tons"] = pd.to_numeric(
+        rows["Campaign Opportunity Tons"],
+        errors="coerce",
+    ).fillna(0.0)
+    if "Landfill Tons" in rows.columns:
+        rows["Landfill Tons"] = pd.to_numeric(rows["Landfill Tons"], errors="coerce").fillna(0.0)
+    else:
+        rows["Landfill Tons"] = 0.0
+    rows = rows[rows["Campaign Opportunity Tons"] >= float(min_tons)].copy()
+    rows["Campaign Opportunity Share"] = np.where(
+        rows["Landfill Tons"] > 0,
+        rows["Campaign Opportunity Tons"] / rows["Landfill Tons"] * 100,
+        0.0,
+    )
+
+    colors = rows["Dominant Destination Key"].map(
+        lambda key: DESTINATION_STREAMS.get(key, DESTINATION_STREAMS["not_readily_recoverable"])["color"]
+    )
+    rows["color_r"] = colors.map(lambda color: color[0])
+    rows["color_g"] = colors.map(lambda color: color[1])
+    rows["color_b"] = colors.map(lambda color: color[2])
+    rows["color_a"] = colors.map(lambda color: color[3])
+    rows["point_radius"] = np.clip(np.sqrt(rows["Campaign Opportunity Tons"].clip(lower=0)) * 8 + 35, 35, 320)
+    rows["tooltip_title"] = rows["Business"].fillna("Campaign target").astype(str)
+    rows["tooltip_body"] = (
+        "Campaign tons: "
+        + rows["Campaign Opportunity Tons"].map(lambda value: f"{value:,.1f}")
+        + "<br/>Share of landfill: "
+        + rows["Campaign Opportunity Share"].map(lambda value: f"{value:,.1f}%")
+        + "<br/>Top material: "
+        + rows["Top Campaign Material"].fillna("")
+        + "<br/>Destination: "
+        + rows["Top Campaign Destination"].fillna("")
+        + "<br/>Business group: "
+        + rows["Business Group"].fillna("")
+        + "<br/>"
+        + rows["Jurisdiction"].fillna("")
+    )
+    return rows.sort_values("Campaign Opportunity Tons", ascending=False).reset_index(drop=True)
+
+
+def usable_phone_mask(values: pd.Series) -> pd.Series:
+    """Return rows with a plausibly dialable North American business number."""
+    return values.fillna("").astype(str).map(lambda value: len(re.sub(r"\D", "", value)) >= 10)
+
+
+def usable_email_mask(values: pd.Series) -> pd.Series:
+    """Return rows with a simple, export-safe business email address."""
+    pattern = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+    return values.fillna("").astype(str).str.strip().str.fullmatch(pattern, na=False)
+
+
+def usable_mailing_mask(values: pd.Series) -> pd.Series:
+    missing = {"", "nan", "none", "unknown", "n/a"}
+    return ~values.fillna("").astype(str).str.strip().str.casefold().isin(missing)
+
+
+def outreach_channel_exports(campaign_rows: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Create reviewable, channel-specific contact lists without sending outreach."""
+    base_columns = [
+        "Business", "Campaign Opportunity Tons", "Top Campaign Material",
+        "Top Campaign Destination", "Business Group", "Jurisdiction", "Phone",
+        "Email", "Website", "Address", "ZIP Code",
+    ]
+    rows = campaign_rows[[column for column in base_columns if column in campaign_rows.columns]].copy()
+    for column in ["Business", "Phone", "Email", "Address"]:
+        if column not in rows.columns:
+            rows[column] = ""
+        rows[column] = rows[column].fillna("").astype(str).str.strip()
+    rows["Campaign Opportunity Tons"] = pd.to_numeric(
+        rows.get("Campaign Opportunity Tons", pd.Series(0.0, index=rows.index)), errors="coerce"
+    ).fillna(0.0)
+    rows["Priority"] = np.arange(1, len(rows) + 1)
+    rows["Review Status"] = "Pending planner review"
+
+    phone_book = rows.loc[usable_phone_mask(rows["Phone"])].copy()
+    phone_book["Suggested Call Topic"] = (
+        "Discuss " + phone_book.get("Top Campaign Material", "selected materials").fillna("selected materials")
+        + " diversion options"
+    )
+    phone_book = phone_book.drop_duplicates(subset=["Phone"], keep="first")
+
+    mailing = rows.loc[usable_mailing_mask(rows["Address"])].copy()
+    mailing["Mail To"] = mailing["Business"]
+    mailing["Address Line 1"] = mailing["Address"]
+    mailing["City State ZIP"] = mailing.apply(
+        lambda row: ", ".join(
+            part for part in [str(row.get("Jurisdiction", "")).strip(), str(row.get("ZIP Code", "")).strip()]
+            if part and part.casefold() not in {"nan", "unknown"}
+        ),
+        axis=1,
+    )
+    mailing = mailing.drop_duplicates(subset=["Mail To", "Address Line 1"], keep="first")
+
+    email = rows.loc[usable_email_mask(rows["Email"])].copy()
+    email["Subject"] = "Waste diversion assistance for your business"
+    email["Email Draft"] = (
+        "Hello " + email["Business"] + ",\n\n"
+        "Our planning team is offering assistance related to "
+        + email.get("Top Campaign Material", "waste diversion").fillna("waste diversion")
+        + ". Please reply if you would like to discuss available options.\n\n"
+        "To stop receiving these outreach emails, reply with unsubscribe."
+    )
+    email = email.drop_duplicates(subset=["Email"], keep="first")
+    return {"phone": phone_book, "mail": mailing, "email": email}
+
+
+def campaign_geography_label(
+    rows: pd.DataFrame,
+    geography_level: str,
+    block_lookup: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    output = rows.copy()
+    output["Campaign Geography"] = "Countywide"
+    output["Campaign Geography ID"] = "Countywide"
+    if geography_level == "Jurisdiction" and "Jurisdiction" in output.columns:
+        output["Campaign Geography"] = output["Jurisdiction"].fillna("Unknown jurisdiction").astype(str)
+        output["Campaign Geography ID"] = output["Campaign Geography"]
+    elif geography_level == "ZIP code" and "ZIP Code" in output.columns:
+        output["Campaign Geography"] = output["ZIP Code"].fillna("Unknown ZIP").replace("", "Unknown ZIP").astype(str)
+        output["Campaign Geography ID"] = output["Campaign Geography"]
+    elif geography_level == "Census block group" and block_lookup is not None and not block_lookup.empty:
+        output = output.merge(block_lookup, on="_business_row_id", how="left")
+        output["Campaign Geography ID"] = output["GEOID"].fillna("Unmatched block group").astype(str)
+        output["Campaign Geography"] = (
+            output["NAMELSAD"].fillna("Unmatched block group").astype(str)
+            + np.where(output["GEOID"].notna(), " | " + output["GEOID"].astype(str), "")
+        )
+    return output
+
+
+def campaign_area_summary(campaign_rows: pd.DataFrame) -> pd.DataFrame:
+    if campaign_rows.empty or "Campaign Geography" not in campaign_rows.columns:
+        return pd.DataFrame()
+    return (
+        campaign_rows.groupby("Campaign Geography", dropna=False)
+        .agg(
+            **{
+                "Campaign Opportunity Tons": ("Campaign Opportunity Tons", "sum"),
+                "Businesses": ("_business_row_id", "nunique"),
+                "Top Material": ("Top Campaign Material", most_common_text),
+                "Top Business Group": ("Business Group", most_common_text),
+                "Top Destination": ("Top Campaign Destination", most_common_text),
+            }
+        )
+        .reset_index()
+        .sort_values("Campaign Opportunity Tons", ascending=False)
+    )
+
+
+def build_campaign_map(
+    campaign_rows: pd.DataFrame,
+    boundary_layers: list[pdk.Layer] | None = None,
+) -> pdk.Deck:
+    boundary_layers = boundary_layers or []
+    center_lat = float((campaign_rows["latitude"].min() + campaign_rows["latitude"].max()) / 2)
+    center_lon = float((campaign_rows["longitude"].min() + campaign_rows["longitude"].max()) / 2)
+    view_state = pdk.ViewState(
+        latitude=center_lat,
+        longitude=center_lon,
+        zoom=zoom_from_bounds(campaign_rows),
+        pitch=0,
+        bearing=0,
+    )
+    point_layer = pdk.Layer(
+        "ScatterplotLayer",
+        id="campaign-target-points",
+        data=campaign_rows,
+        get_position="[longitude, latitude]",
+        get_radius="point_radius",
+        radius_min_pixels=4,
+        radius_max_pixels=18,
+        get_fill_color="[color_r, color_g, color_b, color_a]",
+        get_line_color="[255, 255, 255, 180]",
+        line_width_min_pixels=0.7,
+        pickable=True,
+        auto_highlight=True,
+    )
+    return pdk.Deck(
+        map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+        initial_view_state=view_state,
+        layers=boundary_layers + [point_layer],
+        tooltip={
+            "html": "<b>{tooltip_title}</b><br/>{tooltip_body}",
+            "style": {
+                "backgroundColor": "rgba(34, 42, 38, 0.94)",
+                "color": "white",
+                "fontFamily": "Arial",
+                "fontSize": "12px",
+            },
+        },
+    )
+
+
+def marketplace_material_key_lookup(material_columns: dict[str, dict[str, str]]) -> dict[str, str]:
+    return {format_material_name(material): material for material in sorted(material_columns)}
+
+
+def marketplace_material_group_keywords(material_key: str) -> list[str]:
+    return MARKETPLACE_USER_KEYWORDS.get(material_group(material_key), MARKETPLACE_USER_KEYWORDS["Other"])
+
+
+def marketplace_base_business_frame(
+    filtered: pd.DataFrame,
+    latitude_column: str,
+    longitude_column: str,
+    business_column: str | None,
+    business_group_field: str,
+    jurisdiction_field: str,
+    zip_column: str | None,
+    area_series: pd.Series,
+) -> pd.DataFrame:
+    business_source = source_column(filtered, business_column, "business_name")
+    group_source = source_column(filtered, business_group_field, "business_group")
+    jurisdiction_source = source_column(filtered, jurisdiction_field, "jurisdiction")
+    industry_columns = industry_description_columns(filtered)
+    rows = pd.DataFrame(index=filtered.index)
+    rows["_business_row_id"] = filtered["_business_row_id"] if "_business_row_id" in filtered.columns else filtered.index
+    rows["Business"] = (
+        filtered[business_source].fillna("Unnamed business").astype(str).str.strip()
+        if business_source
+        else "Unnamed business"
+    )
+    rows["Business"] = rows["Business"].replace("", "Unnamed business")
+    rows["Business Group"] = (
+        filtered[group_source].fillna("Unknown business group").astype(str).str.strip()
+        if group_source
+        else "Unknown business group"
+    )
+    rows["Jurisdiction"] = (
+        filtered[jurisdiction_source].fillna("Unknown jurisdiction").astype(str).str.strip()
+        if jurisdiction_source
+        else "Unknown jurisdiction"
+    )
+    rows["ZIP Code"] = (
+        filtered[zip_column].map(clean_zipcode_value)
+        if zip_column and zip_column in filtered.columns
+        else ""
+    )
+    rows["Marketplace Area"] = area_series.reindex(filtered.index).fillna("Unknown area").astype(str)
+    rows["latitude"] = pd.to_numeric(filtered[latitude_column], errors="coerce")
+    rows["longitude"] = pd.to_numeric(filtered[longitude_column], errors="coerce")
+    contact_columns: dict[str, pd.Series] = {}
+    add_business_contact_fields(contact_columns, filtered)
+    for label in ["Hauler", "Phone", "Website"]:
+        rows[label] = contact_columns.get(label, pd.Series("", index=filtered.index)).reindex(filtered.index).fillna("").astype(str)
+
+    text_parts = [rows["Business"], rows["Business Group"], rows["Jurisdiction"]]
+    for column in industry_columns:
+        text_parts.append(filtered[column].fillna("").astype(str))
+    rows["Industry Evidence"] = (
+        pd.concat(text_parts, axis=1)
+        .fillna("")
+        .astype(str)
+        .agg(" | ".join, axis=1)
+    )
+    rows["_match_text"] = rows["Industry Evidence"].str.lower()
+    rows = rows[valid_coordinate_mask(rows)].copy()
+    return rows
+
+
+def build_marketplace_supplier_rows(
+    filtered: pd.DataFrame,
+    material_columns: dict[str, dict[str, str]],
+    selected_material_keys: list[str],
+    area_series: pd.Series,
+    business_column: str | None,
+    business_group_field: str,
+    jurisdiction_field: str,
+    min_supplier_tons: float,
+) -> pd.DataFrame:
+    supplier_rows = build_business_material_exchange_rows(
+        filtered,
+        material_columns,
+        selected_material_keys,
+        area_series,
+        business_column,
+        business_group_field,
+        jurisdiction_field,
+        min_supplier_tons,
+    )
+    if supplier_rows.empty:
+        return supplier_rows
+    supplier_rows = supplier_rows.rename(columns={"Disposed Tons": "Supplier Tons"})
+    supplier_rows["Marketplace Area"] = supplier_rows["Exchange Area"]
+    return supplier_rows.sort_values("Supplier Tons", ascending=False)
+
+
+def build_marketplace_user_rows(
+    base_businesses: pd.DataFrame,
+    selected_material_keys: list[str],
+    selected_user_groups: list[str],
+) -> pd.DataFrame:
+    if base_businesses.empty:
+        return pd.DataFrame()
+    rows = []
+    selected_user_groups = selected_user_groups or []
+    user_source = base_businesses.copy()
+    if selected_user_groups:
+        user_source = user_source[user_source["Business Group"].astype(str).isin(selected_user_groups)].copy()
+
+    for material_key in selected_material_keys:
+        keywords = marketplace_material_group_keywords(material_key)
+        material_label = format_material_name(material_key)
+        group_label = material_group(material_key)
+        keyword_pattern = "|".join(re.escape(keyword) for keyword in keywords)
+        matched = user_source[user_source["_match_text"].str.contains(keyword_pattern, na=False)].copy()
+        if matched.empty:
+            continue
+        matched["Material"] = material_label
+        matched["Material Group"] = group_label
+        matched["Potential User Evidence"] = ", ".join(keywords[:6])
+        matched["User Match Score"] = 1.0 + matched["_match_text"].map(
+            lambda text, keywords=keywords: sum(1 for keyword in keywords if keyword in text)
+        )
+        rows.append(matched)
+    if not rows:
+        return pd.DataFrame()
+    users = pd.concat(rows, ignore_index=True)
+    return users.sort_values(["User Match Score", "Business"], ascending=[False, True])
+
+
+def marketplace_match_summary(suppliers: pd.DataFrame, users: pd.DataFrame) -> pd.DataFrame:
+    if suppliers.empty:
+        return pd.DataFrame()
+    supplier_summary = (
+        suppliers.groupby(["Marketplace Area", "Material", "Material Group"], dropna=False)
+        .agg(
+            **{
+                "Supplier Tons": ("Supplier Tons", "sum"),
+                "Supplier Businesses": ("_business_row_id", "nunique"),
+                "Top Supplier Group": ("Business Group", most_common_text),
+                "Example Suppliers": ("Business", lambda values: ", ".join(pd.Series(values).dropna().astype(str).head(3))),
+            }
+        )
+        .reset_index()
+    )
+    if users.empty:
+        supplier_summary["Potential Users"] = 0
+        supplier_summary["Top User Group"] = ""
+        supplier_summary["Example Users"] = ""
+    else:
+        user_summary = (
+            users.groupby(["Marketplace Area", "Material"], dropna=False)
+            .agg(
+                **{
+                    "Potential Users": ("_business_row_id", "nunique"),
+                    "Top User Group": ("Business Group", most_common_text),
+                    "Example Users": ("Business", lambda values: ", ".join(pd.Series(values).dropna().astype(str).head(3))),
+                }
+            )
+            .reset_index()
+        )
+        supplier_summary = supplier_summary.merge(user_summary, on=["Marketplace Area", "Material"], how="left")
+        supplier_summary[["Potential Users", "Top User Group", "Example Users"]] = supplier_summary[
+            ["Potential Users", "Top User Group", "Example Users"]
+        ].fillna({"Potential Users": 0, "Top User Group": "", "Example Users": ""})
+    supplier_summary["Potential Users"] = supplier_summary["Potential Users"].astype(int)
+    supplier_summary["Marketplace Score"] = (
+        supplier_summary["Supplier Tons"]
+        * np.log1p(supplier_summary["Supplier Businesses"])
+        * np.log1p(supplier_summary["Potential Users"].clip(lower=0))
+    )
+    supplier_summary["Transparency Note"] = (
+        "Suppliers are businesses with modeled landfill disposal of the material; users are inferred from industry keywords."
+    )
+    return supplier_summary.sort_values("Marketplace Score", ascending=False)
+
+
+def marketplace_map_frame(suppliers: pd.DataFrame, users: pd.DataFrame, base_businesses: pd.DataFrame) -> pd.DataFrame:
+    supplier_rollup = pd.DataFrame()
+    if not suppliers.empty:
+        supplier_rollup = (
+            suppliers.groupby("_business_row_id", dropna=False)
+            .agg(
+                **{
+                    "Supplier Tons": ("Supplier Tons", "sum"),
+                    "Supplier Materials": ("Material", lambda values: ", ".join(pd.Series(values).dropna().astype(str).drop_duplicates().head(4))),
+                    "Marketplace Area": ("Marketplace Area", most_common_text),
+                }
+            )
+            .reset_index()
+        )
+    user_rollup = pd.DataFrame()
+    if not users.empty:
+        user_rollup = (
+            users.groupby("_business_row_id", dropna=False)
+            .agg(
+                **{
+                    "User Materials": ("Material", lambda values: ", ".join(pd.Series(values).dropna().astype(str).drop_duplicates().head(4))),
+                    "Potential User Evidence": ("Potential User Evidence", most_common_text),
+                    "User Match Score": ("User Match Score", "max"),
+                    "Marketplace Area": ("Marketplace Area", most_common_text),
+                }
+            )
+            .reset_index()
+        )
+    ids = set()
+    if not supplier_rollup.empty:
+        ids.update(supplier_rollup["_business_row_id"].tolist())
+    if not user_rollup.empty:
+        ids.update(user_rollup["_business_row_id"].tolist())
+    if not ids:
+        return pd.DataFrame()
+    rows = base_businesses[base_businesses["_business_row_id"].isin(ids)].copy()
+    if not supplier_rollup.empty:
+        rows = rows.merge(supplier_rollup, on="_business_row_id", how="left", suffixes=("", "_supplier"))
+    else:
+        rows["Supplier Tons"] = 0.0
+        rows["Supplier Materials"] = ""
+    if not user_rollup.empty:
+        rows = rows.merge(user_rollup, on="_business_row_id", how="left", suffixes=("", "_user"))
+    else:
+        rows["User Materials"] = ""
+        rows["Potential User Evidence"] = ""
+        rows["User Match Score"] = 0.0
+    rows["Supplier Tons"] = pd.to_numeric(rows.get("Supplier Tons", 0.0), errors="coerce").fillna(0.0)
+    rows["User Match Score"] = pd.to_numeric(rows.get("User Match Score", 0.0), errors="coerce").fillna(0.0)
+    rows["Marketplace Role"] = np.where(
+        (rows["Supplier Tons"] > 0) & (rows["User Match Score"] > 0),
+        "Supplier + potential user",
+        np.where(rows["Supplier Tons"] > 0, "Likely supplier", "Potential user"),
+    )
+    role_colors = {
+        "Likely supplier": [76, 137, 73, 210],
+        "Potential user": [35, 105, 154, 205],
+        "Supplier + potential user": [123, 88, 159, 220],
+    }
+    colors = rows["Marketplace Role"].map(role_colors)
+    rows["color_r"] = colors.map(lambda color: color[0])
+    rows["color_g"] = colors.map(lambda color: color[1])
+    rows["color_b"] = colors.map(lambda color: color[2])
+    rows["color_a"] = colors.map(lambda color: color[3])
+    rows["point_radius"] = np.clip(
+        np.sqrt(rows["Supplier Tons"].clip(lower=0)) * 7 + np.where(rows["User Match Score"] > 0, 42, 35),
+        35,
+        300,
+    )
+    rows["tooltip_title"] = rows["Business"]
+    rows["tooltip_body"] = (
+        "Role: "
+        + rows["Marketplace Role"].fillna("")
+        + "<br/>Supplier tons: "
+        + rows["Supplier Tons"].map(lambda value: f"{value:,.1f}")
+        + "<br/>Supplier materials: "
+        + rows["Supplier Materials"].fillna("")
+        + "<br/>Potential user materials: "
+        + rows["User Materials"].fillna("")
+        + "<br/>Evidence: "
+        + rows["Potential User Evidence"].fillna("")
+        + "<br/>Business group: "
+        + rows["Business Group"].fillna("")
+        + "<br/>"
+        + rows["Marketplace Area"].fillna("")
+    )
+    return rows
+
+
+def build_marketplace_map(marketplace_points: pd.DataFrame) -> pdk.Deck:
+    center_lat = float((marketplace_points["latitude"].min() + marketplace_points["latitude"].max()) / 2)
+    center_lon = float((marketplace_points["longitude"].min() + marketplace_points["longitude"].max()) / 2)
+    view_state = pdk.ViewState(
+        latitude=center_lat,
+        longitude=center_lon,
+        zoom=zoom_from_bounds(marketplace_points),
+        pitch=0,
+        bearing=0,
+    )
+    layers = [
+        pdk.Layer(
+            "ScatterplotLayer",
+            id="marketplace-points",
+            data=marketplace_points,
+            get_position="[longitude, latitude]",
+            get_radius="point_radius",
+            radius_min_pixels=4,
+            radius_max_pixels=18,
+            get_fill_color="[color_r, color_g, color_b, color_a]",
+            get_line_color="[255, 255, 255, 180]",
+            line_width_min_pixels=0.7,
+            pickable=True,
+            auto_highlight=True,
+        )
+    ]
+    return pdk.Deck(
+        map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+        initial_view_state=view_state,
+        layers=layers,
+        tooltip={
+            "html": "<b>{tooltip_title}</b><br/>{tooltip_body}",
+            "style": {
+                "backgroundColor": "rgba(34, 42, 38, 0.94)",
+                "color": "white",
+                "fontFamily": "Arial",
+                "fontSize": "12px",
+            },
+        },
     )
 
 
@@ -4508,6 +6194,8 @@ def business_detail_panel(
     if address_column and pd.notna(business_row.get(address_column)):
         st.caption(str(business_row.get(address_column)))
 
+    st.markdown(row_stream_fingerprint_html(business_row, compact=False), unsafe_allow_html=True)
+
     stream_table = business_stream_breakdown(business_row)
     material_table = business_material_breakdown(business_row, material_columns)
 
@@ -4630,14 +6318,54 @@ with st.sidebar:
         help="Leave blank to include every business group.",
     )
 
-    if dashboard in ["Home", "Data infrastructure", "Diversion opportunity", "Circular flow engine", "2025 study vs model"]:
+    industry_fields = industry_description_columns(data)
+    industry_filter_field = "Any NAICS/SIC description"
+    selected_industries: list[str] = []
+    if industry_fields:
+        with st.expander("Industry details", expanded=False):
+            industry_filter_field = st.selectbox(
+                "Industry description field",
+                ["Any NAICS/SIC description"] + industry_fields,
+                help="Use NAICS/SIC descriptions or line of business for a more granular industry slice.",
+            )
+            industry_options = (
+                combined_option_values(data, industry_fields)
+                if industry_filter_field == "Any NAICS/SIC description"
+                else option_values(data[industry_filter_field])
+            )
+            selected_industries = st.multiselect(
+                "NAICS/SIC description",
+                industry_options,
+                default=[],
+                help="Leave blank to include every industry description.",
+            )
+
+    if dashboard in [
+        "Home",
+        "Quick start guide",
+        "Data infrastructure",
+        "Assumptions",
+        "Diversion opportunity",
+        "Outreach campaign builder",
+        "Circular economy marketplace",
+        "Circular flow engine",
+        "2025 study vs model",
+    ]:
         selected_streams = ["disposed"] if dashboard == "Circular flow engine" else STREAM_KEYS
         if dashboard == "Diversion opportunity":
             st.caption("Diversion opportunity uses landfill-disposed material estimates.")
+        if dashboard == "Outreach campaign builder":
+            st.caption("Campaign builder uses landfill-disposed material estimates and its own material selector.")
+        if dashboard == "Circular economy marketplace":
+            st.caption("Marketplace prototype uses landfill-disposed material estimates and inferred user demand.")
         if dashboard == "Circular flow engine":
             st.caption("Circular flow uses landfill-disposed tons for hauling and exchange screening.")
         if dashboard == "Data infrastructure":
             st.caption("This dashboard documents the source systems and transformations behind the DSS.")
+        if dashboard == "Quick start guide":
+            st.caption("New here? Use this page to choose a planning question and learn how to read the model outputs.")
+        if dashboard == "Assumptions":
+            st.caption("This dashboard is the living register of model assumptions, transformations, and validation needs.")
     else:
         selected_streams = st.multiselect(
             "Waste stream type",
@@ -4652,7 +6380,13 @@ with st.sidebar:
     material_keys = sorted(material_columns, key=lambda key: format_material_name(key).casefold())
     selected_materials: list[str] = []
     material_mode = "With stream filter"
-    if dashboard in ["Home", "Data infrastructure", "2025 study vs model"]:
+    if dashboard in [
+        "Home",
+        "Data infrastructure",
+        "Outreach campaign builder",
+        "Circular economy marketplace",
+        "2025 study vs model",
+    ]:
         st.caption("This dashboard uses all material categories for summary calculations.")
     else:
         material_scope = st.radio(
@@ -4660,7 +6394,13 @@ with st.sidebar:
             ["All materials", "Specific materials"],
             horizontal=True,
         )
-    if dashboard not in ["Home", "Data infrastructure", "2025 study vs model"] and material_scope == "Specific materials":
+    if dashboard not in [
+        "Home",
+        "Data infrastructure",
+        "Outreach campaign builder",
+        "Circular economy marketplace",
+        "2025 study vs model",
+    ] and material_scope == "Specific materials":
         selected_materials = st.multiselect(
             "Materials",
             material_keys,
@@ -4681,11 +6421,21 @@ with st.sidebar:
 
     if dashboard == "Business heat map":
         st.divider()
+        heat_map_metric = st.radio(
+            "Heat comparison",
+            HEATMAP_METRICS,
+            index=0,
+            help=(
+                "Total tons shows volume hot spots. Tons per business highlights high-intensity businesses. "
+                "Businesses per sq mi highlights business density regardless of tonnage."
+            ),
+        )
         weight_scale = st.selectbox("Heat weight scale", ["Linear", "Square root", "Log"], index=1)
         radius_pixels = st.slider("Heat radius", min_value=20, max_value=140, value=70, step=5)
         intensity = st.slider("Heat intensity", min_value=0.2, max_value=4.0, value=1.4, step=0.1)
         threshold = st.slider("Heat threshold", min_value=0.00, max_value=0.25, value=0.03, step=0.01)
     else:
+        heat_map_metric = HEATMAP_VOLUME_METRIC
         weight_scale = "Square root"
         radius_pixels = 70
         intensity = 1.4
@@ -4796,6 +6546,45 @@ with st.sidebar:
             format_func=lambda value: "Full" if value == 0 else f"{value:g}",
         )
         top_n_opportunity = st.slider("Ranked rows", min_value=10, max_value=100, value=25, step=5)
+        st.divider()
+        st.header("Garbage transport")
+        st.caption(
+            "Known haulers are assigned to their reported landfill: Waste Connections → Cold Canyon; "
+            "WM → Chicago Grade; Paso Robles Waste and San Miguel Garbage → Paso Robles Landfill."
+        )
+        transport_road_multiplier = st.slider(
+            "Transport road-mile multiplier",
+            min_value=1.0,
+            max_value=1.8,
+            value=DEFAULT_ROAD_DISTANCE_MULTIPLIER,
+            step=0.05,
+            help="Converts straight-line distance to a planning estimate of one-way road miles.",
+        )
+        transport_operations_multiplier = st.slider(
+            "Transport route adjustment",
+            min_value=1.0,
+            max_value=2.0,
+            value=DEFAULT_ROUTE_OPERATIONS_MULTIPLIER,
+            step=0.05,
+            help="Adds collection circulation, staging, and return movement to the one-way landfill distance.",
+        )
+        transport_truckload_tons = st.number_input(
+            "Transport average collection load (tons)",
+            min_value=0.5,
+            max_value=30.0,
+            value=DEFAULT_COLLECTION_TRUCKLOAD_TONS,
+            step=0.5,
+            format="%.1f",
+            help="Annual garbage tons are divided by this shared truck load to allocate vehicle miles and emissions.",
+        )
+        transport_kg_co2e_per_vehicle_mile = st.number_input(
+            "Transport kg CO2e per vehicle-mile",
+            min_value=0.1,
+            max_value=10.0,
+            value=DEFAULT_TRUCK_KG_CO2E_PER_VEHICLE_MILE,
+            step=0.05,
+            format="%.3f",
+        )
         diversion_controls = {
             "selected_destinations": selected_destinations,
             "opportunity_model_mode": opportunity_model_mode,
@@ -4805,6 +6594,102 @@ with st.sidebar:
             "min_opportunity_share": min_opportunity_share,
             "boundary_detail": diversion_boundary_detail,
             "top_n_opportunity": top_n_opportunity,
+            "transport_road_multiplier": transport_road_multiplier,
+            "transport_operations_multiplier": transport_operations_multiplier,
+            "transport_truckload_tons": transport_truckload_tons,
+            "transport_kg_co2e_per_vehicle_mile": transport_kg_co2e_per_vehicle_mile,
+        }
+
+    campaign_controls = {}
+    if dashboard == "Outreach campaign builder":
+        st.divider()
+        st.header("Campaign")
+        campaign_model_mode = st.radio(
+            "Opportunity model",
+            [RAW_OPPORTUNITY_MODE, STUDY_CALIBRATED_OPPORTUNITY_MODE],
+            horizontal=False,
+            help="Calibrated mode adjusts stream totals to match the 2025 study shares.",
+        )
+        campaign_materials = st.multiselect(
+            "Campaign materials",
+            [format_material_name(material) for material in material_keys],
+            default=[],
+            help="Leave blank to include every landfill material with a mapped pathway.",
+        )
+        campaign_destinations = st.multiselect(
+            "Destination pathways",
+            DIVERTIBLE_DESTINATIONS,
+            default=DIVERTIBLE_DESTINATIONS,
+            format_func=destination_label,
+        )
+        if not campaign_destinations:
+            campaign_destinations = DIVERTIBLE_DESTINATIONS
+        campaign_business_groups = st.multiselect(
+            "Campaign business group",
+            option_values(data[business_group_field]),
+            default=[],
+            help="Optional campaign-specific business group filter.",
+        )
+        campaign_geography = st.selectbox(
+            "Campaign geography",
+            ["Countywide", "Jurisdiction", "ZIP code", "Census block group"],
+            index=1,
+        )
+        campaign_min_tons = st.slider(
+            "Minimum campaign tons",
+            min_value=0.0,
+            max_value=50.0,
+            value=1.0,
+            step=0.5,
+        )
+        campaign_top_n = st.slider("Ranked businesses", min_value=10, max_value=250, value=50, step=10)
+        campaign_controls = {
+            "opportunity_model_mode": campaign_model_mode,
+            "materials": campaign_materials,
+            "destinations": campaign_destinations,
+            "business_groups": campaign_business_groups,
+            "geography": campaign_geography,
+            "min_tons": campaign_min_tons,
+            "top_n": campaign_top_n,
+        }
+
+    marketplace_controls = {}
+    if dashboard == "Circular economy marketplace":
+        st.divider()
+        st.header("Marketplace")
+        material_label_lookup = marketplace_material_key_lookup(material_columns)
+        marketplace_material_labels = st.multiselect(
+            "Marketplace materials",
+            list(material_label_lookup),
+            default=[],
+            help="Leave blank to include every landfill material. Selecting one or a few materials makes the prototype easier to inspect.",
+        )
+        marketplace_geography = st.selectbox(
+            "Marketplace geography",
+            ["Jurisdiction", "ZIP code", "Census block group", "Countywide"],
+            index=0,
+        )
+        marketplace_user_groups = st.multiselect(
+            "Potential user business group",
+            option_values(data[business_group_field]),
+            default=[],
+            help="Optional. Leave blank to infer potential users from NAICS/SIC and business text.",
+        )
+        marketplace_min_supplier_tons = st.slider(
+            "Minimum supplier tons",
+            min_value=0.0,
+            max_value=50.0,
+            value=1.0,
+            step=0.5,
+        )
+        marketplace_top_n = st.slider("Marketplace rows", min_value=10, max_value=150, value=40, step=10)
+        marketplace_controls = {
+            "material_lookup": material_label_lookup,
+            "material_labels": marketplace_material_labels,
+            "geography": marketplace_geography,
+            "user_groups": marketplace_user_groups,
+            "min_supplier_tons": marketplace_min_supplier_tons,
+            "top_n": marketplace_top_n,
         }
 
     circular_controls = {}
@@ -4813,9 +6698,18 @@ with st.sidebar:
         st.header("Circular Flow")
         allocation_mode = st.selectbox(
             "Landfill allocation",
-            ["Distance + wasteshed share", "Nearest landfill", "Wasteshed share only"],
+            [
+                HAULER_FACILITY_ALLOCATION_MODE,
+                "Distance + wasteshed share",
+                "Nearest landfill",
+                "Wasteshed share only",
+            ],
             index=0,
-            help="Use Distance + wasteshed share until IWMA route or facility tonnage data is available.",
+            help=(
+                "Hauler facility rules use the current IWMA operating assumption: Waste Connections to Cold Canyon, "
+                "Waste Management to Chicago Grade, and Paso Robles Waste / San Miguel Garbage to Paso Robles. "
+                "Unknown haulers fall back to Distance + wasteshed share."
+            ),
         )
         road_packages_ready = road_network_packages_available()
         tiger_packages_ready = tiger_road_packages_available()
@@ -4974,6 +6868,10 @@ if selected_jurisdictions:
     filtered = filtered[filtered[jurisdiction_field].astype(str).isin(selected_jurisdictions)]
 if selected_business_groups:
     filtered = filtered[filtered[business_group_field].astype(str).isin(selected_business_groups)]
+if selected_industries:
+    filtered = filtered[
+        industry_filter_mask(filtered, industry_filter_field, industry_fields, selected_industries)
+    ]
 
 metric_values, metric_label, metric_columns = selected_metric(
     filtered,
@@ -4983,6 +6881,10 @@ metric_values, metric_label, metric_columns = selected_metric(
     material_mode,
 )
 filtered = filtered.assign(selected_waste_tons=metric_values)
+umbrella_filtered = umbrella_metrics_frame(filtered, business_group_field)
+study_filtered = umbrella_filtered
+multifamily_excluded_rows = len(filtered) - len(umbrella_filtered)
+study_excluded_rows = multifamily_excluded_rows
 
 latitude_column, longitude_column = coordinate_columns(filtered)
 if latitude_column is None or longitude_column is None:
@@ -5000,8 +6902,23 @@ map_df = prepare_business_map_frame(
     business_group_field,
     business_column,
 )
+umbrella_map_df = prepare_business_map_frame(
+    umbrella_filtered,
+    latitude_column,
+    longitude_column,
+    jurisdiction_field,
+    business_group_field,
+    business_column,
+)
 
 st.caption(f"Source: {source_label}")
+loading_overlay = st.empty()
+loading_overlay.markdown(
+    """
+    <div class="dashboard-loading-overlay"></div>
+    """,
+    unsafe_allow_html=True,
+)
 
 if dashboard == "Home":
     zip_column = zipcode_display_column(filtered)
@@ -5029,8 +6946,14 @@ if dashboard == "Home":
     )
     focused_opportunity = home_opportunity[focus_mask].copy()
     stream_totals = waste_stream_totals(filtered)
-    group_composition = material_group_composition(filtered, material_columns)
+    group_composition = material_group_composition(study_filtered, material_columns)
     business_group_rollup = business_group_opportunity_rollup(opportunity, DIVERTIBLE_DESTINATIONS)
+    destination_rollup = diversion_destination_rollup(
+        opportunity,
+        DIVERTIBLE_DESTINATIONS,
+        DEFAULT_OPPORTUNITY_TON_THRESHOLD,
+        DEFAULT_OPPORTUNITY_SHARE_THRESHOLD,
+    )
 
     total_generation = float(stream_totals["Tons"].sum()) if not stream_totals.empty else 0.0
     landfill_tons = float(opportunity["Landfill Tons"].sum()) if not opportunity.empty else 0.0
@@ -5038,6 +6961,19 @@ if dashboard == "Home":
     organics_tons = float(opportunity["curbside_organics"].sum()) if "curbside_organics" in opportunity.columns else 0.0
     methane_co2e = organics_tons * ORGANICS_CO2E_FACTOR_20_YEAR
     diversion_rate = potential_tons / landfill_tons * 100 if landfill_tons > 0 else 0.0
+    alignment_score_value = study_alignment_score(group_composition)
+    briefing_insights = home_briefing_insights(
+        opportunity,
+        destination_rollup,
+        material_detail,
+        business_group_rollup,
+        group_composition,
+        focused_opportunity,
+        organics_tons,
+        methane_co2e,
+        alignment_score_value,
+    )
+    action_queue = home_action_queue(material_detail)
 
     metric_cols = st.columns(4)
     metric_cols[0].metric("Mapped businesses", f"{len(map_df):,}")
@@ -5051,7 +6987,10 @@ if dashboard == "Home":
     )
     st.caption(opportunity_model_note(opportunity_model_mode))
 
-    summary_cols = st.columns(4)
+    st.subheader("Planner Briefing")
+    render_briefing_cards(briefing_insights)
+
+    summary_cols = st.columns(5)
     summary_cols[0].metric("Total modeled generation", f"{total_generation:,.1f}")
     summary_cols[1].metric(
         "Potential diversion rate",
@@ -5065,6 +7004,75 @@ if dashboard == "Home":
     )
     top_group = business_group_rollup.iloc[0]["Business Group"] if not business_group_rollup.empty else "None"
     summary_cols[3].metric("Top opportunity group", str(top_group))
+    summary_cols[4].metric(
+        "Study alignment score",
+        f"{alignment_score_value:.0f}%",
+        help="100% minus half the summed absolute material-group share gaps between the model and the 2025 ICI study.",
+    )
+    st.progress(
+        int(round(alignment_score_value)),
+        text=f"{alignment_label(alignment_score_value)} against 2025 ICI material-group shares",
+    )
+
+    st.subheader("KPI Confidence Labels")
+    render_metric_confidence_labels(
+        [
+            {
+                "Metric": "Mapped businesses",
+                "Confidence": confidence_label("source"),
+                "Kind": "source",
+                "Basis": "Direct workbook rows with latitude/longitude.",
+            },
+            {
+                "Metric": "Landfill tons",
+                "Confidence": confidence_label("model"),
+                "Kind": "model",
+                "Basis": "CalRecycle profile scaling applied to business rows.",
+            },
+            {
+                "Metric": "Potential diversion",
+                "Confidence": confidence_label("validation"),
+                "Kind": "validation",
+                "Basis": "Material pathway crosswalk and study-calibrated option.",
+            },
+            {
+                "Metric": "20-year organics CO2e",
+                "Confidence": confidence_label("model"),
+                "Kind": "model",
+                "Basis": "Modeled organics tons with a planning conversion factor.",
+            },
+            {
+                "Metric": "Study alignment",
+                "Confidence": confidence_label("validation"),
+                "Kind": "validation",
+                "Basis": "Diagnostic score after excluding multifamily rows.",
+            },
+        ]
+    )
+
+    st.subheader("Countywide Flow Overview")
+    render_countywide_sankey(stream_totals, opportunity)
+
+    st.subheader("Action Queue")
+    if action_queue.empty:
+        st.warning("No outreach campaign rows are available for the current slice.")
+    else:
+        st.dataframe(
+            action_queue.head(12),
+            width="stretch",
+            height=330,
+            hide_index=True,
+            column_config={
+                "Expected Tons Impacted": st.column_config.NumberColumn(format="%.1f"),
+                "Businesses": st.column_config.NumberColumn(format="%d"),
+            },
+        )
+        st.download_button(
+            "Export action queue",
+            data=action_queue.to_csv(index=False).encode("utf-8"),
+            file_name="home_action_queue.csv",
+            mime="text/csv",
+        )
 
     left_chart, right_chart = st.columns(2)
     with left_chart:
@@ -5072,12 +7080,6 @@ if dashboard == "Home":
         st.bar_chart(stream_totals, x="Waste Stream", y="Tons", height=320)
     with right_chart:
         st.subheader("Potential Diversion Split")
-        destination_rollup = diversion_destination_rollup(
-            opportunity,
-            DIVERTIBLE_DESTINATIONS,
-            DEFAULT_OPPORTUNITY_TON_THRESHOLD,
-            DEFAULT_OPPORTUNITY_SHARE_THRESHOLD,
-        )
         st.altair_chart(
             iwma_destination_bar_chart(destination_rollup, "Destination", POTENTIAL_TONS_COLUMN, height=320),
             width="stretch",
@@ -5086,6 +7088,10 @@ if dashboard == "Home":
     left_table, right_table = st.columns(2)
     with left_table:
         st.subheader("Landfill Material Composition")
+        if study_excluded_rows:
+            st.caption(
+                f"Study comparison excludes {study_excluded_rows:,} multifamily row(s) from the current slice."
+            )
         st.dataframe(
             group_composition[
                 ["Material Group", "Model Tons", "Model Share", "2025 Study Share", "Difference (pp)"]
@@ -5111,6 +7117,9 @@ if dashboard == "Home":
                 POTENTIAL_TONS_COLUMN: st.column_config.NumberColumn(format="%.1f"),
             },
         )
+
+elif dashboard == "Quick start guide":
+    render_quick_start_guide()
 
 elif dashboard == "Data infrastructure":
     metrics = infrastructure_summary_metrics(data, filtered, material_columns)
@@ -5193,26 +7202,198 @@ elif dashboard == "Data infrastructure":
         else:
             st.warning("No quality flag columns were found in the workbook.")
 
+elif dashboard == "Assumptions":
+    assumption_table = assumptions_register()
+    active_assumptions = assumption_table[assumption_table["Status"] == "Active model rule"]
+    planning_defaults = assumption_table[assumption_table["Status"] == "Planning default"]
+    validation_needed = assumption_table[assumption_table["Status"] == "Validation needed"]
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Documented items", f"{len(assumption_table):,}")
+    metric_cols[1].metric("Active model rules", f"{len(active_assumptions):,}")
+    metric_cols[2].metric("Planning defaults", f"{len(planning_defaults):,}")
+    metric_cols[3].metric("Items needing validation", f"{len(validation_needed):,}")
+
+    st.info(
+        "This is a living assumptions register for the DSS—not a claim that every item has been independently "
+        "verified. It separates implemented rules from planner defaults and the items that need source-data or "
+        "field validation before operational use."
+    )
+    st.caption(
+        "The register covers data intake, processing, spatial analysis, waste and diversion modeling, study "
+        "calibration, landfill allocation, transport emissions, and the circular-economy prototype."
+    )
+
+    selected_stages = st.multiselect(
+        "Show stages",
+        assumption_table["Stage"].drop_duplicates().tolist(),
+        default=assumption_table["Stage"].drop_duplicates().tolist(),
+    )
+    selected_statuses = st.multiselect(
+        "Show statuses",
+        assumption_table["Status"].drop_duplicates().tolist(),
+        default=assumption_table["Status"].drop_duplicates().tolist(),
+    )
+    displayed_assumptions = assumption_table[
+        assumption_table["Stage"].isin(selected_stages)
+        & assumption_table["Status"].isin(selected_statuses)
+    ].copy()
+
+    register_tab, coverage_tab, validation_tab, transport_tab = st.tabs(
+        ["Full register", "Dashboard coverage", "Validation priorities", "Transport formula"]
+    )
+    with register_tab:
+        st.dataframe(
+            displayed_assumptions,
+            width="stretch",
+            height=650,
+            hide_index=True,
+            column_config={
+                "Implementation": st.column_config.TextColumn(width="large"),
+                "Effect / validation need": st.column_config.TextColumn(width="large"),
+            },
+        )
+        st.download_button(
+            "Export assumptions register",
+            data=displayed_assumptions.to_csv(index=False).encode("utf-8"),
+            file_name="waste_dss_assumptions_register.csv",
+            mime="text/csv",
+        )
+    with coverage_tab:
+        st.caption(
+            "Use this crosswalk to see which assumptions shape each dashboard. Select a dashboard below to open it directly."
+        )
+        dashboard_coverage = pd.DataFrame(
+            [
+                ("Home", "Waste estimation; Aggregate reporting", "Countywide screening totals, KPI confidence, and planning briefings."),
+                ("Data infrastructure", "Data intake; Classification; Waste estimation; Spatial processing", "Source inventory, transformation swimlanes, and workbook quality flags."),
+                ("Business heat map", "Classification; Waste estimation; Spatial processing; Aggregate reporting", "Mapped tonnage intensity and business-density comparisons."),
+                ("Census block groups", "Classification; Waste estimation; Spatial processing; Aggregate reporting", "Point-in-polygon geography, block-group rankings, and map boundary assumptions."),
+                ("Diversion opportunity", "Waste estimation; Aggregate reporting; Diversion analysis; Study validation; Landfill allocation; Transport emissions", "Business opportunity ranking, material pathways, known hauler landfill assignment, and garbage transport estimates."),
+                ("Outreach campaign builder", "Classification; Waste estimation; Diversion analysis", "Campaign lists built from modeled landfill material opportunity."),
+                ("Circular economy marketplace", "Classification; Waste estimation; Spatial processing; Circular economy", "Modeled suppliers and inferred potential users; requires validation before matching businesses."),
+                ("Circular flow engine", "Waste estimation; Spatial processing; Landfill allocation; Transport emissions", "Landfill flows, optional road-network routing, facility shares, and hauling emissions."),
+                ("2025 study vs model", "Waste estimation; Aggregate reporting; Diversion analysis; Study validation", "ICI study comparison, denominator disclosure, and diagnostic calibration."),
+            ],
+            columns=["Dashboard", "Relevant assumption stages", "What the assumptions affect"],
+        )
+        available_coverage = dashboard_coverage[dashboard_coverage["Dashboard"].isin(DASHBOARD_OPTIONS)].copy()
+        st.dataframe(available_coverage, width="stretch", height=360, hide_index=True)
+        if not available_coverage.empty:
+            st.selectbox(
+                "Open related dashboard",
+                available_coverage["Dashboard"].tolist(),
+                key="assumptions_dashboard_target",
+            )
+            st.button("Open dashboard", on_click=navigate_to_assumption_dashboard)
+    with validation_tab:
+        st.caption("These items are the clearest priorities for data-quality checks, partner confirmation, or field validation.")
+        st.dataframe(
+            validation_needed,
+            width="stretch",
+            height=530,
+            hide_index=True,
+            column_config={
+                "Implementation": st.column_config.TextColumn(width="large"),
+                "Effect / validation need": st.column_config.TextColumn(width="large"),
+            },
+        )
+        st.markdown(
+            "**Recommended validation sequence:** resolve identity/duplicate questions; verify business coordinates and "
+            "business size; obtain hauler/facility and route information; then confirm diversion service and material acceptance."
+        )
+    with transport_tab:
+        st.markdown(
+            """
+            **Garbage transport calculation used in Diversion opportunity**
+
+            ```text
+            assigned landfill = hauler rule, otherwise distance + wasteshed fallback
+            estimated one-way road miles = straight-line business-to-landfill miles × road-mile multiplier
+            truckload-equivalent trips = annual garbage tons ÷ average collection load
+            allocated vehicle miles = one-way road miles × truckload-equivalent trips × route adjustment
+            truck CO2e (metric tons) = allocated vehicle miles × kg CO2e per vehicle-mile ÷ 1,000
+            ```
+
+            Facility assignment is source-provided for the four recognized hauler names. Distance, payload, route adjustment, and emissions factor remain planning inputs until route, load, and fleet data are supplied by the haulers.
+            """
+        )
+
 elif dashboard == "Business heat map":
-    map_df["heat_weight"] = heat_weight(map_df["selected_waste_tons"], weight_scale)
+    if heat_map_metric == HEATMAP_VOLUME_METRIC:
+        heat_df = umbrella_map_df.copy()
+        heat_df["heat_weight"] = heat_weight(heat_df["selected_waste_tons"], weight_scale)
+    else:
+        heat_df = heatmap_grid_source(umbrella_map_df, heat_map_metric, weight_scale)
 
     left_metric, middle_metric, right_metric = st.columns(3)
-    left_metric.metric("Mapped businesses", f"{len(map_df):,}")
-    middle_metric.metric("Selected tons", f"{filtered['selected_waste_tons'].sum():,.1f}")
-    right_metric.metric("Metric", metric_label)
+    left_metric.metric("Selected tons", f"{umbrella_filtered['selected_waste_tons'].sum():,.1f}")
+    middle_metric.metric("Heat comparison", heat_map_metric)
+    right_metric.metric("Selected metric", metric_label)
+    if multifamily_excluded_rows:
+        st.caption(
+            f"Heat intensity and summary tons exclude {multifamily_excluded_rows:,} multifamily business(es). "
+            "Their individual map points and business details remain available."
+        )
 
     if map_df.empty:
         st.warning("No mapped businesses match the current slice.")
     else:
-        render_heatmap_legend(metric_label)
-        st.pydeck_chart(
-            build_business_heat_map(map_df, radius_pixels, intensity, threshold),
-            width="stretch",
-            height=650,
-            key=map_component_key("business_heat_map", map_df),
-        )
+        render_heatmap_legend(metric_label, heat_map_metric)
+        heatmap_event = None
+        if selected_jurisdictions:
+            map_col, jurisdiction_col = st.columns([3, 1])
+            with map_col:
+                heatmap_event = st.pydeck_chart(
+                    build_business_heat_map(map_df, heat_df, radius_pixels, intensity, threshold),
+                    width="stretch",
+                    height=650,
+                    key=map_component_key(f"business_heat_map_{heat_map_metric}", map_df),
+                    selection_mode="single-object",
+                    on_select="rerun",
+                )
+            with jurisdiction_col:
+                st.markdown("**Jurisdiction KPIs**")
+                jurisdiction_summary = heatmap_jurisdiction_kpis(
+                    umbrella_filtered,
+                    selected_jurisdictions,
+                    jurisdiction_field,
+                    material_columns,
+                    selected_streams,
+                    selected_materials,
+                    material_mode,
+                )
+                render_heatmap_jurisdiction_cards(jurisdiction_summary)
+        else:
+            heatmap_event = st.pydeck_chart(
+                build_business_heat_map(map_df, heat_df, radius_pixels, intensity, threshold),
+                width="stretch",
+                height=650,
+                key=map_component_key(f"business_heat_map_{heat_map_metric}", map_df),
+                selection_mode="single-object",
+                on_select="rerun",
+            )
 
-    st.subheader("Filtered Businesses")
+        selected_business_id = selected_business_id_from_pydeck_event(heatmap_event)
+        if selected_business_id is not None:
+            selected_business_match = filtered[
+                filtered["_business_row_id"].astype(int) == int(selected_business_id)
+            ]
+            if not selected_business_match.empty:
+                st.divider()
+                st.subheader("Selected Business")
+                business_detail_panel(
+                    selected_business_match.iloc[0],
+                    material_columns,
+                    business_column,
+                    address_column,
+                    jurisdiction_field,
+                    business_group_field,
+                )
+        else:
+            st.caption("Click a business dot to inspect its stream fingerprint and material profile.")
+
+    st.subheader("Filtered Results")
     table = filtered_business_table(
         filtered,
         business_column,
@@ -5222,20 +7403,58 @@ elif dashboard == "Business heat map":
         latitude_column,
         longitude_column,
     )
-    st.dataframe(
-        table,
-        width="stretch",
-        height=360,
-        hide_index=True,
+    material_table = material_driver_table(
+        filtered,
+        material_columns,
+        selected_streams,
+        selected_materials,
+        material_mode,
     )
+    if not material_table.empty:
+        material_total = float(material_table["Selected Waste Tons"].sum())
+        material_table = material_table.reset_index(drop=True)
+        material_table.insert(0, "Rank", np.arange(1, len(material_table) + 1))
+        material_table["Share of Tons"] = (
+            material_table["Selected Waste Tons"] / material_total * 100
+            if material_total > 0
+            else 0.0
+        )
 
-    csv_data = table.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Export filtered rows",
-        data=csv_data,
-        file_name="filtered_waste_heatmap_rows.csv",
-        mime="text/csv",
-    )
+    business_tab, material_tab = st.tabs(["Businesses", "Materials"])
+    with business_tab:
+        st.dataframe(
+            table,
+            width="stretch",
+            height=360,
+            hide_index=True,
+        )
+        csv_data = table.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Export filtered businesses",
+            data=csv_data,
+            file_name="filtered_waste_heatmap_rows.csv",
+            mime="text/csv",
+        )
+    with material_tab:
+        if material_table.empty:
+            st.warning("No material-level tons are available for the current heat-map slice.")
+        else:
+            st.dataframe(
+                material_table,
+                width="stretch",
+                height=360,
+                hide_index=True,
+                column_config={
+                    "Selected Waste Tons": st.column_config.NumberColumn(format="%.1f"),
+                    "Share of Tons": st.column_config.NumberColumn(format="%.1f%%"),
+                },
+            )
+            st.download_button(
+                "Export heat-map materials",
+                data=material_table.to_csv(index=False).encode("utf-8"),
+                file_name="filtered_waste_heatmap_materials.csv",
+                mime="text/csv",
+            )
     render_vital_few_section(
         filtered,
         material_columns,
@@ -5288,11 +7507,12 @@ elif dashboard == "Census block groups":
         block_groups,
         block_group_cache_key,
     )
-    joined = attach_block_group_lookup(map_df, block_group_lookup)
+    joined = attach_block_group_lookup(umbrella_map_df, block_group_lookup)
+    display_joined = attach_block_group_lookup(map_df, block_group_lookup)
     block_summary = aggregate_block_groups(joined, block_groups)
     block_summary = add_block_group_top_material_group(
         block_summary,
-        filtered,
+        umbrella_filtered,
         block_group_lookup,
         material_columns,
         selected_streams,
@@ -5310,7 +7530,12 @@ elif dashboard == "Census block groups":
     left_metric, middle_metric, right_metric = st.columns(3)
     left_metric.metric("Matched to block groups", f"{matched_count:,}")
     middle_metric.metric("Active block groups", f"{active_block_groups:,}")
-    right_metric.metric("Selected tons", f"{map_df['selected_waste_tons'].sum():,.1f}")
+    right_metric.metric("Selected tons", f"{umbrella_map_df['selected_waste_tons'].sum():,.1f}")
+    if multifamily_excluded_rows:
+        st.caption(
+            f"Block-group counts, rankings, and tons exclude {multifamily_excluded_rows:,} multifamily business(es). "
+            "Individual multifamily points and profiles remain available."
+        )
 
     if selected_geoid:
         selected_label = selected_block_group_label(block_summary, selected_geoid)
@@ -5341,7 +7566,7 @@ elif dashboard == "Census block groups":
         build_block_group_map(
             block_summary,
             block_group_controls["block_metric_name"],
-            joined,
+            display_joined,
             block_group_controls["show_business_points"],
             float(block_group_controls["simplify_tolerance"]),
             selected_geoid,
@@ -5360,8 +7585,8 @@ elif dashboard == "Census block groups":
 
     selected_geoid = st.session_state.selected_block_group_geoid
     if selected_geoid:
-        selected_business_ids = joined.loc[
-            joined["GEOID"].astype(str) == str(selected_geoid),
+        selected_business_ids = display_joined.loc[
+            display_joined["GEOID"].astype(str) == str(selected_geoid),
             "_business_row_id",
         ].dropna()
         selected_businesses = filtered[
@@ -5624,6 +7849,19 @@ elif dashboard == "Circular flow engine":
         f"{total_vehicle_miles:,.0f}",
         help="One-way route miles multiplied by truckload-equivalent trips and collection route adjustment.",
     )
+    if circular_controls["allocation_mode"] == HAULER_FACILITY_ALLOCATION_MODE and not business_rollup.empty:
+        rule_businesses = int((business_rollup["allocation_source"] == "Hauler facility rule").sum())
+        fallback_businesses = int(
+            (business_rollup["allocation_source"] == "Fallback: distance + wasteshed share").sum()
+        )
+        rule_tons = float(
+            flows.loc[flows["allocation_source"] == "Hauler facility rule", "flow_tons"].sum()
+        ) if not flows.empty else 0.0
+        st.caption(
+            f"Hauler facility rules assigned {rule_businesses:,} mapped businesses "
+            f"({rule_tons:,.1f} landfill tons/year). "
+            f"{fallback_businesses:,} mapped businesses use the distance + wasteshed fallback."
+        )
 
     st.info(
         "This is a screening model for circular-flow planning. Hauling lines are estimated flows, not verified "
@@ -5877,6 +8115,7 @@ elif dashboard == "Circular flow engine":
                     "co2e_metric_tons": "Truck CO2e (metric tons)",
                     "load_co2e_metric_tons": "Load-based CO2e (metric tons)",
                     "distance_source": "Distance Source",
+                    "allocation_source": "Assignment Method",
                 }
             )
             hauling_columns = [
@@ -5886,6 +8125,7 @@ elif dashboard == "Circular flow engine":
                     "Jurisdiction",
                     "Business Group",
                     "Landfill",
+                    "Assignment Method",
                     "Business Landfill Tons",
                     "One-Way Miles",
                     "Annual Ton-Miles",
@@ -6076,6 +8316,7 @@ elif dashboard == "Circular flow engine":
         st.markdown(
             """
             - Landfills are the three SLO County landfill facilities listed by IWMA.
+            - Hauler facility allocation assigns known trash haulers to their reported disposal facility and uses the blended planning fallback only for unknown haulers.
             - Census TIGER road-network mode uses official county road lines and caches the results.
             - OpenStreetMap mode is available for a more detailed graph, but it depends on a local GraphML file or Overpass availability.
             - Straight-line mode multiplies business-to-landfill air distance by the fallback road factor.
@@ -6088,6 +8329,12 @@ elif dashboard == "Circular flow engine":
             - Use IWMA facility tonnage, franchise-hauler route data, or CalRecycle facility reports when available.
             - Material exchange is a screening layer. It does not prove that a business can use another business's discarded material.
             """
+        )
+        st.subheader("Hauler-to-Landfill Rules")
+        st.dataframe(
+            hauler_rule_reference_table(),
+            width="stretch",
+            hide_index=True,
         )
         st.subheader("Trip and Payload Sources")
         st.dataframe(
@@ -6149,10 +8396,25 @@ elif dashboard == "Diversion opportunity":
         address_column,
         zip_column,
     )
+    umbrella_raw_opportunity, umbrella_raw_material_detail = build_diversion_opportunity(
+        umbrella_filtered,
+        material_columns,
+        selected_materials,
+        business_column,
+        jurisdiction_field,
+        business_group_field,
+        address_column,
+        zip_column,
+    )
     selected_model_mode = diversion_controls["opportunity_model_mode"]
     opportunity, material_detail, calibration_factors = apply_opportunity_model_mode(
         raw_opportunity,
         raw_material_detail,
+        selected_model_mode,
+    )
+    umbrella_opportunity, umbrella_material_detail, _ = apply_opportunity_model_mode(
+        umbrella_raw_opportunity,
+        umbrella_raw_material_detail,
         selected_model_mode,
     )
     selected_destinations = diversion_controls["selected_destinations"]
@@ -6170,6 +8432,10 @@ elif dashboard == "Diversion opportunity":
     )
 
     opportunity_with_selection = add_selected_opportunity_columns(opportunity, selected_destinations)
+    umbrella_opportunity_with_selection = add_selected_opportunity_columns(
+        umbrella_opportunity,
+        selected_destinations,
+    )
     focus_mask = opportunity_focus_mask(
         opportunity,
         selected_destinations,
@@ -6177,10 +8443,58 @@ elif dashboard == "Diversion opportunity":
         min_opportunity_share,
     )
     focused_opportunity = opportunity_with_selection[focus_mask].copy()
-    total_landfill = float(opportunity["Landfill Tons"].sum()) if not opportunity.empty else 0.0
-    total_opportunity = float(opportunity_with_selection["Selected Opportunity Tons"].sum()) if not opportunity.empty else 0.0
+    umbrella_focus_mask = opportunity_focus_mask(
+        umbrella_opportunity,
+        selected_destinations,
+        min_opportunity_tons,
+        min_opportunity_share,
+    )
+    focused_umbrella_opportunity = umbrella_opportunity_with_selection[umbrella_focus_mask].copy()
+    total_landfill = float(umbrella_opportunity["Landfill Tons"].sum()) if not umbrella_opportunity.empty else 0.0
+    total_opportunity = float(umbrella_opportunity_with_selection["Selected Opportunity Tons"].sum()) if not umbrella_opportunity.empty else 0.0
     opportunity_rate = (total_opportunity / total_landfill * 100) if total_landfill > 0 else 0.0
-    businesses_with_opportunity = int(focus_mask.sum()) if not opportunity.empty else 0
+    businesses_with_opportunity = int(umbrella_focus_mask.sum()) if not umbrella_opportunity.empty else 0
+
+    # Transport uses the landfill (garbage) stream regardless of the opportunity-material slice.
+    # This keeps each business's disposal assignment and hauling burden comparable while the
+    # diversion controls are used to screen potential outreach actions.
+    transport_source = filtered.copy()
+    transport_source["selected_waste_tons"] = pd.to_numeric(
+        transport_source.get(STREAM_COLUMNS["disposed"]["total"], 0.0), errors="coerce"
+    ).fillna(0.0)
+    transport_map_df = prepare_business_map_frame(
+        transport_source,
+        latitude_column,
+        longitude_column,
+        jurisdiction_field,
+        business_group_field,
+        business_column,
+    )
+    transport_landfill_frame = landfill_assumption_frame(
+        {facility["Landfill"]: facility["default_share"] for facility in LANDFILL_FACILITIES}
+    )
+    transport_flows, transport_business_rollup, transport_landfill_summary = estimate_haul_flows(
+        transport_map_df,
+        transport_landfill_frame,
+        HAULER_FACILITY_ALLOCATION_MODE,
+        diversion_controls["transport_road_multiplier"],
+        diversion_controls["transport_operations_multiplier"],
+        DEFAULT_TRUCK_KG_CO2E_PER_TON_MILE,
+        DEFAULT_COLLECTION_TRIPS_PER_YEAR,
+        diversion_controls["transport_truckload_tons"],
+        DEFAULT_DIVERSION_TRIPS_PER_BUSINESS,
+        diversion_controls["transport_kg_co2e_per_vehicle_mile"],
+    )
+    transport_total_tons = float(transport_flows["flow_tons"].sum()) if not transport_flows.empty else 0.0
+    transport_ton_miles = float(transport_flows["ton_miles"].sum()) if not transport_flows.empty else 0.0
+    transport_vehicle_miles = float(transport_flows["vehicle_miles"].sum()) if not transport_flows.empty else 0.0
+    transport_co2e = float(transport_flows["co2e_metric_tons"].sum()) if not transport_flows.empty else 0.0
+    transport_rule_tons = (
+        float(transport_flows.loc[transport_flows["allocation_source"] == "Hauler facility rule", "flow_tons"].sum())
+        if not transport_flows.empty
+        else 0.0
+    )
+    transport_fallback_tons = max(transport_total_tons - transport_rule_tons, 0.0)
 
     metric_cols = st.columns(4)
     metric_cols[0].metric("Landfill tons", f"{total_landfill:,.1f}")
@@ -6193,6 +8507,11 @@ elif dashboard == "Diversion opportunity":
         "The numbers are planning estimates based on the workbook and county study; confirm priority sites before outreach."
     )
     st.caption(opportunity_model_note(selected_model_mode))
+    if multifamily_excluded_rows:
+        st.caption(
+            f"Diversion summary metrics and material/destination rollups exclude {multifamily_excluded_rows:,} "
+            "multifamily business(es). Individual businesses remain visible in the map and business table."
+        )
 
     boundary_layers = []
     requested_boundaries = diversion_controls["boundary_layers"]
@@ -6258,15 +8577,15 @@ elif dashboard == "Diversion opportunity":
         )
 
     destination_rollup = diversion_destination_rollup(
-        opportunity,
+        umbrella_opportunity,
         selected_destinations,
         min_opportunity_tons,
         min_opportunity_share,
     )
     material_rollup = diversion_material_rollup(
-        material_detail,
+        umbrella_material_detail,
         selected_destinations,
-        focused_opportunity["_business_row_id"] if not focused_opportunity.empty else [],
+        focused_umbrella_opportunity["_business_row_id"] if not focused_umbrella_opportunity.empty else [],
     )
     business_table = focused_opportunity.sort_values(
         "Selected Opportunity Tons",
@@ -6274,8 +8593,8 @@ elif dashboard == "Diversion opportunity":
     )
 
     st.subheader("Diversion Opportunity Drivers")
-    business_tab, material_tab, destination_tab, study_tab = st.tabs(
-        ["Businesses", "Materials", "Destination streams", "Study reference"]
+    business_tab, transport_tab, material_tab, destination_tab, study_tab = st.tabs(
+        ["Businesses", "Garbage transport", "Materials", "Destination streams", "Study reference"]
     )
     with business_tab:
         business_columns = [
@@ -6316,6 +8635,112 @@ elif dashboard == "Diversion opportunity":
             "Export diversion opportunity businesses",
             data=business_table.to_csv(index=False).encode("utf-8"),
             file_name="diversion_opportunity_businesses.csv",
+            mime="text/csv",
+        )
+
+    with transport_tab:
+        st.subheader("Business Garbage Transport and Emissions")
+        st.caption(
+            "Landfill destinations are assigned by the reported hauler. One-way road miles are estimated from "
+            "business-to-facility straight-line distance using the sidebar multiplier; emissions are allocated by "
+            "truckload-equivalent annual garbage tons."
+        )
+        transport_metric_cols = st.columns(4)
+        transport_metric_cols[0].metric("Garbage tons/year", f"{transport_total_tons:,.1f}")
+        transport_metric_cols[1].metric("Annual haul ton-miles", f"{transport_ton_miles:,.0f}")
+        transport_metric_cols[2].metric("Truck CO2e/year", f"{transport_co2e:,.1f} mt")
+        transport_metric_cols[3].metric("Annual vehicle miles", f"{transport_vehicle_miles:,.0f}")
+        st.caption(
+            f"Exact hauler-to-landfill rules assign {transport_rule_tons:,.1f} garbage tons/year. "
+            f"{transport_fallback_tons:,.1f} tons/year with an unrecognized or blank hauler use the "
+            "distance-and-wasteshed fallback."
+        )
+
+        transport_left, transport_right = st.columns([0.45, 0.55])
+        with transport_left:
+            if transport_landfill_summary.empty:
+                st.warning("No mapped garbage transport records are available for the current filters.")
+            else:
+                st.altair_chart(
+                    alt.Chart(transport_landfill_summary)
+                    .mark_bar(opacity=0.88)
+                    .encode(
+                        x=alt.X("Landfill:N", sort="-y", title=None, axis=alt.Axis(labelAngle=-25)),
+                        y=alt.Y("Allocated Landfill Tons:Q", title="Assigned garbage tons/year"),
+                        color=alt.Color(
+                            "Landfill:N",
+                            scale=alt.Scale(
+                                domain=list(LANDFILL_CHART_COLORS.keys()),
+                                range=list(LANDFILL_CHART_COLORS.values()),
+                            ),
+                            title=None,
+                        ),
+                        tooltip=[
+                            alt.Tooltip("Landfill:N"),
+                            alt.Tooltip("Allocated Landfill Tons:Q", format=",.1f"),
+                            alt.Tooltip("Truck CO2e (metric tons):Q", format=",.2f"),
+                        ],
+                    )
+                    .properties(height=300),
+                    width="stretch",
+                )
+        with transport_right:
+            st.dataframe(
+                transport_landfill_summary,
+                width="stretch",
+                height=340,
+                hide_index=True,
+                column_config={
+                    "Allocated Landfill Tons": st.column_config.NumberColumn(format="%.1f"),
+                    "Avg One-Way Miles": st.column_config.NumberColumn(format="%.1f"),
+                    "Annual Ton-Miles": st.column_config.NumberColumn(format="%.0f"),
+                    "Annual Vehicle Miles": st.column_config.NumberColumn(format="%.0f"),
+                    "Truck CO2e (metric tons)": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+
+        transport_table = transport_business_rollup.rename(
+            columns={
+                "business_name": "Business",
+                "jurisdiction": "Jurisdiction",
+                "business_group": "Business Group",
+                "selected_waste_tons": "Garbage Tons",
+                "route_miles": "Estimated One-Way Road Miles",
+                "ton_miles": "Annual Ton-Miles",
+                "truckload_equivalent_trips": "Truckload-Equivalent Trips",
+                "vehicle_miles": "Annual Vehicle Miles",
+                "co2e_metric_tons": "Truck CO2e (metric tons)",
+                "allocation_source": "Landfill Assignment",
+            }
+        )
+        transport_columns = [
+            column
+            for column in [
+                "Business", "Jurisdiction", "Business Group", "Hauler", "Landfill", "Landfill Assignment",
+                "Garbage Tons", "Estimated One-Way Road Miles", "Annual Ton-Miles",
+                "Truckload-Equivalent Trips", "Annual Vehicle Miles", "Truck CO2e (metric tons)",
+            ]
+            if column in transport_table.columns
+        ]
+        transport_table = transport_table[transport_columns].sort_values(
+            "Truck CO2e (metric tons)", ascending=False
+        )
+        st.subheader("Business Transport Drivers")
+        st.dataframe(
+            transport_table.head(100), width="stretch", height=380, hide_index=True,
+            column_config={
+                "Garbage Tons": st.column_config.NumberColumn(format="%.1f"),
+                "Estimated One-Way Road Miles": st.column_config.NumberColumn(format="%.1f"),
+                "Annual Ton-Miles": st.column_config.NumberColumn(format="%.0f"),
+                "Truckload-Equivalent Trips": st.column_config.NumberColumn(format="%.2f"),
+                "Annual Vehicle Miles": st.column_config.NumberColumn(format="%.0f"),
+                "Truck CO2e (metric tons)": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
+        st.download_button(
+            "Export business garbage transport",
+            data=transport_table.to_csv(index=False).encode("utf-8"),
+            file_name="diversion_opportunity_garbage_transport.csv",
             mime="text/csv",
         )
 
@@ -6399,9 +8824,9 @@ elif dashboard == "Diversion opportunity":
             "The dashboard applies the material pathway mapping to business-level landfill material estimates."
         )
 
-else:
+elif dashboard == "Outreach campaign builder":
     zip_column = zipcode_display_column(filtered)
-    opportunity, material_detail = build_diversion_opportunity(
+    raw_opportunity, raw_material_detail = build_diversion_opportunity(
         filtered,
         material_columns,
         [],
@@ -6411,9 +8836,487 @@ else:
         address_column,
         zip_column,
     )
-    group_comparison = material_group_composition(filtered, material_columns)
+    opportunity, material_detail, calibration_factors = apply_opportunity_model_mode(
+        raw_opportunity,
+        raw_material_detail,
+        campaign_controls["opportunity_model_mode"],
+    )
+    campaign_geography = campaign_controls["geography"]
+    block_lookup = None
+    campaign_block_groups = None
+    if campaign_geography == "Census block group":
+        try:
+            with st.spinner("Preparing campaign block groups..."):
+                block_group_path = ensure_census_block_group_zip(DEFAULT_TIGER_YEAR, DEFAULT_STATE_FIPS)
+                campaign_block_groups = load_block_groups_from_file(str(block_group_path), DEFAULT_COUNTY_FIPS)
+                coord_lookup_source = data[["_business_row_id", latitude_column, longitude_column]].rename(
+                    columns={latitude_column: "latitude", longitude_column: "longitude"}
+                )
+                block_group_cache_key = "|".join(campaign_block_groups["GEOID"].astype(str).sort_values().tolist())
+                block_lookup = build_business_block_group_lookup(
+                    coord_lookup_source,
+                    campaign_block_groups,
+                    block_group_cache_key,
+                )
+        except Exception as exc:
+            st.warning("Census block groups could not be prepared. The campaign builder is using countywide geography.")
+            st.caption(str(exc))
+            campaign_geography = "Countywide"
+
+    campaign_rows = build_campaign_business_table(
+        opportunity,
+        material_detail,
+        filtered,
+        latitude_column,
+        longitude_column,
+        campaign_controls["materials"],
+        campaign_controls["destinations"],
+        campaign_controls["business_groups"],
+        campaign_controls["min_tons"],
+    )
+    campaign_rows = campaign_geography_label(campaign_rows, campaign_geography, block_lookup)
+    area_summary = campaign_area_summary(campaign_rows)
+
+    st.subheader("Outreach Campaign Builder")
+    st.caption(
+        "Build a campaign list from modeled landfill material opportunity. Filters in the sidebar define the material, "
+        "destination pathway, business group, geography, and minimum tons threshold."
+    )
+    st.caption(opportunity_model_note(campaign_controls["opportunity_model_mode"]))
+
+    if campaign_rows.empty:
+        st.warning("No businesses match the current campaign settings.")
+        st.stop()
+
+    area_options = area_summary["Campaign Geography"].tolist() if not area_summary.empty else []
+    selected_campaign_areas = st.multiselect(
+        "Focus campaign areas",
+        area_options,
+        default=[],
+        help="Leave blank to include all areas matching the sidebar settings.",
+    )
+    campaign_display = (
+        campaign_rows[campaign_rows["Campaign Geography"].isin(selected_campaign_areas)].copy()
+        if selected_campaign_areas
+        else campaign_rows.copy()
+    )
+    display_area_summary = campaign_area_summary(campaign_display)
+
+    total_campaign_tons = float(campaign_display["Campaign Opportunity Tons"].sum())
+    total_campaign_businesses = int(campaign_display["_business_row_id"].nunique())
+    top_area = (
+        display_area_summary.iloc[0]["Campaign Geography"]
+        if not display_area_summary.empty
+        else "None"
+    )
+    top_material = most_common_text(campaign_display["Top Campaign Material"]) if not campaign_display.empty else "None"
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Campaign tons", f"{total_campaign_tons:,.1f}")
+    metric_cols[1].metric("Target businesses", f"{total_campaign_businesses:,}")
+    metric_cols[2].metric("Top area", str(top_area)[:30])
+    metric_cols[3].metric("Top material", str(top_material)[:30])
+
+    boundary_layers = []
+    requested_boundaries = []
+    if (
+        campaign_geography == "Census block group"
+        and campaign_block_groups is not None
+        and "Campaign Geography ID" in campaign_display.columns
+    ):
+        selected_geoids = set(campaign_display["Campaign Geography ID"].dropna().astype(str))
+        block_layer_frame = campaign_block_groups[campaign_block_groups["GEOID"].astype(str).isin(selected_geoids)].copy()
+        if not block_layer_frame.empty:
+            block_layer_frame["boundary_name"] = block_layer_frame.get("NAMELSAD", block_layer_frame["GEOID"]).astype(str)
+            block_layer_frame["boundary_type"] = "Campaign block group"
+            boundary_layers.append(
+                boundary_layer(block_layer_frame, "campaign-block-groups", [35, 105, 154, 210], [76, 137, 73, 22])
+            )
+            requested_boundaries.append("Census block groups")
+
+    if campaign_display.empty:
+        st.warning("No businesses remain after the focus-area selection.")
+    else:
+        render_diversion_map_legend(campaign_controls["destinations"], requested_boundaries)
+        st.pydeck_chart(
+            build_campaign_map(campaign_display, boundary_layers),
+            width="stretch",
+            height=620,
+            key=map_component_key("outreach_campaign_map", campaign_display),
+        )
+
+    st.subheader("Ranked Campaign Businesses")
+    ranked_columns = [
+        column
+        for column in [
+            "Business",
+            "Campaign Opportunity Tons",
+            "Campaign Opportunity Share",
+            "Top Campaign Material",
+            "Top Campaign Destination",
+            "Materials",
+            "Preferred Destinations",
+            "Campaign Geography",
+            "Business Group",
+            "Jurisdiction",
+            "ZIP Code",
+            "Hauler",
+            "Phone",
+            "Website",
+            "Address",
+            "Landfill Tons",
+        ]
+        if column in campaign_display.columns
+    ]
+    st.dataframe(
+        campaign_display[ranked_columns].head(campaign_controls["top_n"]),
+        width="stretch",
+        height=410,
+        hide_index=True,
+        column_config={
+            "Campaign Opportunity Tons": st.column_config.NumberColumn(format="%.1f"),
+            "Campaign Opportunity Share": st.column_config.NumberColumn(format="%.1f%%"),
+            "Landfill Tons": st.column_config.NumberColumn(format="%.1f"),
+        },
+    )
+    st.download_button(
+        "Export ranked campaign businesses",
+        data=campaign_display[ranked_columns].to_csv(index=False).encode("utf-8"),
+        file_name="outreach_campaign_businesses.csv",
+        mime="text/csv",
+    )
+
+    st.subheader("Outreach Contact Kit")
+    st.caption(
+        "Exports are generated for the ranked target count above and require planner review before use. "
+        "The app does not send messages, scrape contacts, or add people to a mailing list."
+    )
+    outreach_targets = campaign_display.head(campaign_controls["top_n"]).copy()
+    channel_exports = outreach_channel_exports(outreach_targets)
+    channel_metrics = st.columns(3)
+    channel_metrics[0].metric("Phone-ready businesses", f"{len(channel_exports['phone']):,}")
+    channel_metrics[1].metric("Mail-ready businesses", f"{len(channel_exports['mail']):,}")
+    channel_metrics[2].metric("Email-ready businesses", f"{len(channel_exports['email']):,}")
+    st.caption(
+        "Email-ready requires an imported valid business email address. The current packaged workbook has no email field, "
+        "so email exports remain empty until an authorized source supplies one."
+    )
+    contact_tabs = st.tabs(["Phone book", "Mailing list", "Email review list"])
+    with contact_tabs[0]:
+        phone_book = channel_exports["phone"]
+        st.dataframe(phone_book, width="stretch", height=300, hide_index=True)
+        st.download_button(
+            "Download phone book",
+            data=phone_book.to_csv(index=False).encode("utf-8"),
+            file_name="outreach_phone_book.csv",
+            mime="text/csv",
+        )
+    with contact_tabs[1]:
+        mailing_list = channel_exports["mail"]
+        st.dataframe(mailing_list, width="stretch", height=300, hide_index=True)
+        st.download_button(
+            "Download envelope mailing list",
+            data=mailing_list.to_csv(index=False).encode("utf-8"),
+            file_name="outreach_envelope_mailing_list.csv",
+            mime="text/csv",
+        )
+    with contact_tabs[2]:
+        email_list = channel_exports["email"]
+        st.dataframe(email_list, width="stretch", height=300, hide_index=True)
+        st.download_button(
+            "Download email review list",
+            data=email_list.to_csv(index=False).encode("utf-8"),
+            file_name="outreach_email_review_list.csv",
+            mime="text/csv",
+        )
+
+    area_tab, material_tab = st.tabs(["Area summary", "Material summary"])
+    with area_tab:
+        if display_area_summary.empty:
+            st.warning("No area summary is available.")
+        else:
+            st.dataframe(
+                display_area_summary.head(50),
+                width="stretch",
+                height=320,
+                hide_index=True,
+                column_config={
+                    "Campaign Opportunity Tons": st.column_config.NumberColumn(format="%.1f"),
+                    "Businesses": st.column_config.NumberColumn(format="%d"),
+                },
+            )
+            st.download_button(
+                "Export campaign area summary",
+                data=display_area_summary.to_csv(index=False).encode("utf-8"),
+                file_name="outreach_campaign_area_summary.csv",
+                mime="text/csv",
+            )
+    with material_tab:
+        material_summary = (
+            campaign_display.groupby(["Top Campaign Material", "Top Campaign Destination"], dropna=False)
+            .agg(
+                **{
+                    "Campaign Opportunity Tons": ("Campaign Opportunity Tons", "sum"),
+                    "Businesses": ("_business_row_id", "nunique"),
+                    "Top Business Group": ("Business Group", most_common_text),
+                    "Top Geography": ("Campaign Geography", most_common_text),
+                }
+            )
+            .reset_index()
+            .sort_values("Campaign Opportunity Tons", ascending=False)
+        )
+        st.dataframe(
+            material_summary.head(50),
+            width="stretch",
+            height=320,
+            hide_index=True,
+            column_config={
+                "Campaign Opportunity Tons": st.column_config.NumberColumn(format="%.1f"),
+                "Businesses": st.column_config.NumberColumn(format="%d"),
+            },
+        )
+        st.download_button(
+            "Export campaign material summary",
+            data=material_summary.to_csv(index=False).encode("utf-8"),
+            file_name="outreach_campaign_material_summary.csv",
+            mime="text/csv",
+        )
+
+elif dashboard == "Circular economy marketplace":
+    zip_column = zipcode_display_column(filtered)
+    selected_marketplace_materials = [
+        marketplace_controls["material_lookup"][label]
+        for label in marketplace_controls["material_labels"]
+        if label in marketplace_controls["material_lookup"]
+    ]
+    if not selected_marketplace_materials:
+        selected_marketplace_materials = sorted(material_columns)
+
+    marketplace_geography = marketplace_controls["geography"]
+    marketplace_block_lookup = None
+    marketplace_block_groups = None
+    if marketplace_geography == "Census block group":
+        try:
+            with st.spinner("Preparing marketplace block groups..."):
+                block_group_path = ensure_census_block_group_zip(DEFAULT_TIGER_YEAR, DEFAULT_STATE_FIPS)
+                marketplace_block_groups = load_block_groups_from_file(str(block_group_path), DEFAULT_COUNTY_FIPS)
+                coord_lookup_source = data[["_business_row_id", latitude_column, longitude_column]].rename(
+                    columns={latitude_column: "latitude", longitude_column: "longitude"}
+                )
+                block_group_cache_key = "|".join(marketplace_block_groups["GEOID"].astype(str).sort_values().tolist())
+                marketplace_block_lookup = build_business_block_group_lookup(
+                    coord_lookup_source,
+                    marketplace_block_groups,
+                    block_group_cache_key,
+                )
+        except Exception as exc:
+            st.warning("Census block group marketplace areas could not be prepared. Falling back to jurisdiction.")
+            st.caption(str(exc))
+            marketplace_geography = "Jurisdiction"
+
+    area_series = circular_exchange_area_series(
+        filtered,
+        marketplace_geography,
+        marketplace_block_lookup,
+        zip_column,
+        jurisdiction_field,
+    )
+    base_businesses = marketplace_base_business_frame(
+        filtered,
+        latitude_column,
+        longitude_column,
+        business_column,
+        business_group_field,
+        jurisdiction_field,
+        zip_column,
+        area_series,
+    )
+    supplier_rows = build_marketplace_supplier_rows(
+        filtered,
+        material_columns,
+        selected_marketplace_materials,
+        area_series,
+        business_column,
+        business_group_field,
+        jurisdiction_field,
+        marketplace_controls["min_supplier_tons"],
+    )
+    user_rows = build_marketplace_user_rows(
+        base_businesses,
+        selected_marketplace_materials,
+        marketplace_controls["user_groups"],
+    )
+    match_summary = marketplace_match_summary(supplier_rows, user_rows)
+
+    st.subheader("Circular Economy Marketplace Prototype")
+    st.caption(
+        "This prototype maps likely material suppliers and potential users. Suppliers are based on modeled landfill "
+        "disposal of selected materials; potential users are inferred from business group, NAICS/SIC descriptions, "
+        "line of business, and business names."
+    )
+
+    area_options = match_summary["Marketplace Area"].tolist() if not match_summary.empty else []
+    selected_marketplace_areas = st.multiselect(
+        "Focus marketplace areas",
+        area_options,
+        default=[],
+        help="Leave blank to include every marketplace area in the current slice.",
+    )
+    if selected_marketplace_areas:
+        supplier_display = supplier_rows[supplier_rows["Exchange Area"].isin(selected_marketplace_areas)].copy()
+        user_display = user_rows[user_rows["Marketplace Area"].isin(selected_marketplace_areas)].copy()
+        match_display = match_summary[match_summary["Marketplace Area"].isin(selected_marketplace_areas)].copy()
+    else:
+        supplier_display = supplier_rows.copy()
+        user_display = user_rows.copy()
+        match_display = match_summary.copy()
+
+    map_points = marketplace_map_frame(supplier_display, user_display, base_businesses)
+
+    total_supplier_tons = float(supplier_display["Supplier Tons"].sum()) if not supplier_display.empty else 0.0
+    supplier_count = int(supplier_display["_business_row_id"].nunique()) if not supplier_display.empty else 0
+    user_count = int(user_display["_business_row_id"].nunique()) if not user_display.empty else 0
+    viable_area_count = int((match_display["Potential Users"] > 0).sum()) if not match_display.empty else 0
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Supplier tons", f"{total_supplier_tons:,.1f}")
+    metric_cols[1].metric("Likely suppliers", f"{supplier_count:,}")
+    metric_cols[2].metric("Potential users", f"{user_count:,}")
+    metric_cols[3].metric("Areas with both", f"{viable_area_count:,}")
+
+    if map_points.empty:
+        st.warning("No marketplace suppliers or users match the current settings.")
+    else:
+        render_map_legend(
+            "Marketplace legend",
+            [
+                ("Likely supplier", [76, 137, 73, 210], "dot"),
+                ("Potential user", [35, 105, 154, 205], "dot"),
+                ("Supplier + potential user", [123, 88, 159, 220], "dot"),
+            ],
+            note="Dot role is inferred from modeled material supply and industry-text demand proxies.",
+        )
+        st.pydeck_chart(
+            build_marketplace_map(map_points),
+            width="stretch",
+            height=640,
+            key=map_component_key("circular_marketplace_map", map_points),
+        )
+
+    opportunity_tab, supplier_tab, user_tab, assumptions_tab = st.tabs(
+        ["Exchange opportunities", "Likely suppliers", "Potential users", "Assumptions"]
+    )
+    with opportunity_tab:
+        if match_display.empty:
+            st.warning("No exchange opportunity rows are available.")
+        else:
+            st.dataframe(
+                match_display.head(marketplace_controls["top_n"]),
+                width="stretch",
+                height=390,
+                hide_index=True,
+                column_config={
+                    "Supplier Tons": st.column_config.NumberColumn(format="%.1f"),
+                    "Marketplace Score": st.column_config.NumberColumn(format="%.1f"),
+                },
+            )
+            st.download_button(
+                "Export marketplace opportunities",
+                data=match_display.to_csv(index=False).encode("utf-8"),
+                file_name="circular_marketplace_opportunities.csv",
+                mime="text/csv",
+            )
+
+    with supplier_tab:
+        if supplier_display.empty:
+            st.warning("No likely suppliers match the current settings.")
+        else:
+            supplier_columns = [
+                "Business",
+                "Supplier Tons",
+                "Material",
+                "Material Group",
+                "Exchange Area",
+                "Business Group",
+                "Jurisdiction",
+                "Industry Description",
+            ]
+            st.dataframe(
+                supplier_display[[column for column in supplier_columns if column in supplier_display.columns]]
+                .head(marketplace_controls["top_n"]),
+                width="stretch",
+                height=390,
+                hide_index=True,
+                column_config={"Supplier Tons": st.column_config.NumberColumn(format="%.1f")},
+            )
+            st.download_button(
+                "Export likely suppliers",
+                data=supplier_display.to_csv(index=False).encode("utf-8"),
+                file_name="circular_marketplace_suppliers.csv",
+                mime="text/csv",
+            )
+
+    with user_tab:
+        if user_display.empty:
+            st.warning("No potential users match the current settings.")
+        else:
+            user_columns = [
+                "Business",
+                "Material",
+                "Material Group",
+                "Marketplace Area",
+                "Business Group",
+                "Jurisdiction",
+                "Potential User Evidence",
+                "User Match Score",
+            ]
+            st.dataframe(
+                user_display[[column for column in user_columns if column in user_display.columns]]
+                .head(marketplace_controls["top_n"]),
+                width="stretch",
+                height=390,
+                hide_index=True,
+                column_config={"User Match Score": st.column_config.NumberColumn(format="%.1f")},
+            )
+            st.download_button(
+                "Export potential users",
+                data=user_display.to_csv(index=False).encode("utf-8"),
+                file_name="circular_marketplace_users.csv",
+                mime="text/csv",
+            )
+
+    with assumptions_tab:
+        st.markdown(
+            """
+            **How this prototype classifies marketplace roles**
+
+            - **Likely suppliers** are businesses with modeled landfill-disposed tons of the selected material.
+            - **Potential users** are inferred from business group, NAICS/SIC descriptions, line of business, and business names.
+            - The match does not prove that a business can technically use the material; it identifies where planner follow-up may be worthwhile.
+            - Marketplace score increases when a geography has more supplier tons, more supplier businesses, and more inferred potential users.
+            - The next validation step is to replace keyword demand proxies with confirmed procurement needs, reuse specifications, or SIC/NAICS process rules.
+            """
+        )
+        keyword_rows = [
+            {"Material Group": group, "User Keywords": ", ".join(keywords)}
+            for group, keywords in MARKETPLACE_USER_KEYWORDS.items()
+        ]
+        st.dataframe(pd.DataFrame(keyword_rows), width="stretch", hide_index=True)
+
+else:
+    zip_column = zipcode_display_column(study_filtered)
+    opportunity, material_detail = build_diversion_opportunity(
+        study_filtered,
+        material_columns,
+        [],
+        business_column,
+        jurisdiction_field,
+        business_group_field,
+        address_column,
+        zip_column,
+    )
+    group_comparison = material_group_composition(study_filtered, material_columns)
     pathway_comparison = model_pathway_composition(opportunity)
-    detail_composition = material_group_detail_composition(filtered, material_columns)
+    detail_composition = material_group_detail_composition(study_filtered, material_columns)
 
     model_landfill = float(opportunity["Landfill Tons"].sum()) if not opportunity.empty else 0.0
     model_organics_share = float(
@@ -6458,6 +9361,11 @@ else:
         "This page compares the workbook's calculated landfill material composition against the 2025 SLO County ICI "
         "waste characterization study. Large gaps are model-diagnostic signals, not planner-facing claims."
     )
+    if study_excluded_rows:
+        st.caption(
+            f"Validation metrics exclude {study_excluded_rows:,} multifamily row(s) from the current slice because "
+            "multifamily generators are useful for planning but outside the ICI study basis."
+        )
     st.caption(
         f"Full report denominator note: Table 2-4 lists Commercial ICI as "
         f"{STUDY_SECTOR_BASIS_ICI_REFUSE_TONS:,.0f} 2023 tons, while Table 4-2's ICI composition "
@@ -6552,3 +9460,5 @@ else:
             5. The model and study may have different scopes, denominators, and years: the full report lists Commercial ICI as 34,280 tons in the sector-basis table, while the ICI composition table sums to 57,705 tons. Until that is reconciled with IWMA/MSW Consultants, percentages are safer than study-derived tonnage.
             """
         )
+
+loading_overlay.empty()

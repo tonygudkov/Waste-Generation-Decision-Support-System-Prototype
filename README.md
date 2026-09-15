@@ -9,6 +9,8 @@ For the stakeholder prototype, deploy `demo_app.py`. It uses the same app code b
 - Business heat map
 - Census block groups
 - Diversion opportunity
+- Quick start guide
+- Assumptions register
 - 2025 study vs model
 
 The demo expects the packaged workbook at:
@@ -58,17 +60,22 @@ C:\Users\tonyg\OneDrive - Cal Poly\MS Project - SLO Environmental Planning DSS\S
 ## What It Supports
 
 - Business heat map exploration by latitude and longitude.
+- Planner-friendly Quick Start Guide that links planning questions to the relevant dashboards, interpretation guardrails, and the model-assumptions register.
+- Living assumptions register covering data intake, processing, spatial analysis, waste/diversion modeling, landfill allocation, transport emissions, and validation priorities.
 - Census block group choropleth mapping and rankings for San Luis Obispo County.
 - Circular flow screening with landfill allocation, hauling emissions, and material exchange opportunities.
+- Diversion opportunity transport extension: assigns garbage to the reported hauler's landfill and reports business-level haul miles, ton-miles, vehicle miles, and truck CO2e.
 - Jurisdiction filtering using either the source jurisdiction or CalRecycle jurisdiction fields.
 - Business group filtering using the normalized or source business group fields.
 - Waste stream slicing for landfill, recycle, organics, and diversion.
 - Material slicing either layered with the waste stream filter or shown as material total generation.
 - CSV exports for filtered businesses and block group rankings.
+- An outreach campaign builder that ranks modeled diversion targets and produces separate reviewable phone-book, envelope-mailing, and email-review CSVs. It does not scrape contacts or send outreach; email exports require an authorized source column containing business email addresses.
+- Multifamily businesses remain available in business-level maps, tables, and profiles, but are excluded from aggregate heat-map, block-group, diversion-opportunity, and ICI study-validation metrics.
 
 ## Census Boundaries
 
-The Census Block Groups dashboard auto-downloads the 2023 TIGER/Line California block group file from:
+The Census Block Groups dashboard uses the packaged 2023 San Luis Obispo County block-group boundary file, so the map works offline. If that file is removed, it auto-downloads the 2023 TIGER/Line California block group file from:
 
 ```text
 https://www2.census.gov/geo/tiger/TIGER2023/BG/tl_2023_06_bg.zip
